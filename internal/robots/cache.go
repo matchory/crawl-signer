@@ -113,6 +113,10 @@ type Cache struct {
 	entries map[string]*entry
 	lru     *list.List // front is most recently used
 	bytes   int64
+
+	// OnLookup, if set before use, is called per checked request with
+	// whether a fresh cached entry answered it.
+	OnLookup func(hit bool)
 }
 
 func NewCache(f Fetcher, maxBytes int64, now func() time.Time) *Cache {
@@ -135,7 +139,12 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 	o = Origin{Scheme: scheme, Authority: auth}
 	key := scheme + "://" + auth
 
-	if e, ok := c.lookup(key); ok && c.now().Before(e.expires) {
+	e, ok := c.lookup(key)
+	hit := ok && c.now().Before(e.expires)
+	if c.OnLookup != nil {
+		c.OnLookup(hit)
+	}
+	if hit {
 		return c.decide(e, path)
 	}
 
@@ -175,6 +184,13 @@ func (c *Cache) decide(e entry, path string) Outcome {
 		return Allowed
 	}
 	return Disallowed
+}
+
+// Stats returns the number of cached origins and their rules' size in bytes.
+func (c *Cache) Stats() (entries int, bytes int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.entries), c.bytes
 }
 
 // lookup returns a copy of key's entry and marks it recently used.

@@ -338,3 +338,30 @@ func TestCheckCanonicalisesOrigin(t *testing.T) {
 		t.Fatalf("ftp scheme: %v, want Unavailable", got)
 	}
 }
+
+func TestLookupHookAndStats(t *testing.T) {
+	const robots = "User-agent: *\nDisallow: /x\n"
+	clk := newClock()
+	c := NewCache(newFake(body(robots)), 1<<20, clk.now)
+	var hits, misses int
+	c.OnLookup = func(hit bool) {
+		if hit {
+			hits++
+		} else {
+			misses++
+		}
+	}
+	ctx := context.Background()
+	c.Check(ctx, example, "/")
+	c.Check(ctx, example, "/x")
+	c.Check(ctx, example, "/robots.txt")
+	clk.advance(25 * time.Hour)
+	c.Check(ctx, example, "/")
+	if hits != 1 || misses != 2 {
+		t.Errorf("hits %d misses %d, want 1 and 2", hits, misses)
+	}
+	entries, bytes := c.Stats()
+	if entries != 1 || bytes != int64(Parse([]byte(robots), Agent).Size()) {
+		t.Errorf("stats: %d entries, %d bytes", entries, bytes)
+	}
+}

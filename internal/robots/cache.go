@@ -165,7 +165,7 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 }
 
 func (c *Cache) decide(e entry, path string) Outcome {
-	if e.allowAll {
+	if e.allowAll && c.now().Before(e.expires) {
 		return Allowed
 	}
 	if !e.good || c.now().Sub(e.goodAt) > maxStale {

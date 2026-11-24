@@ -161,6 +161,30 @@ func TestNotFoundIsNoStaleFallback(t *testing.T) {
 	}
 }
 
+func TestExpiredNotFoundOnWaitTimeout(t *testing.T) {
+	old := waitTimeout
+	waitTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { waitTimeout = old })
+
+	clk := newClock()
+	f := newFake(func(Origin) (Result, error) { return Result{Status: 404}, nil })
+	c := NewCache(f, 1<<20, clk.now)
+	ctx := context.Background()
+	if got := c.Check(ctx, example, "/a"); got != Allowed {
+		t.Fatalf("after 404: %v, want Allowed", got)
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f.set(func(Origin) (Result, error) {
+		<-release
+		return Result{Status: 404}, nil
+	})
+	clk.advance(25 * time.Hour)
+	if got := c.Check(ctx, example, "/a"); got != Unavailable {
+		t.Fatalf("expired 404, refetch timed out: %v, want Unavailable", got)
+	}
+}
+
 func TestFailureBackoff(t *testing.T) {
 	clk := newClock()
 	f := newFake(func(Origin) (Result, error) { return Result{Status: 500}, nil })

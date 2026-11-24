@@ -54,7 +54,12 @@ func TestTarget(t *testing.T) {
 	for _, a := range []string{"10.0.0.1", "[fd7a::1]", "169.254.169.254", "localhost", "foo.localhost:443", "[::1]:443",
 		"evil@127.0.0.1", "example.com:", "127.1", "0x7f.0.0.1", "2130706433", "017700000001",
 		":443", ".", "..", "127.1..", "localhost..", "::1:443",
-		"[169.254.169.254].", "[::1].", "[::1]x:443", "[127.0.0.1]x", "[::1]:", "example.com:44a"} {
+		"[169.254.169.254].", "[::1].", "[::1]x:443", "[127.0.0.1]x", "[::1]:", "example.com:44a",
+		"[::]", "[::]:443", " 127.0.0.1", "127.0.0.1 ", "127.0.0.1\t", "\t127.0.0.1", " localhost", "127.0.0.1\n",
+		"10.0.0.1/", "127.0.0.1#", "%31%32%37.0.0.1",
+		"[::127.0.0.1]", "[::a9fe:a9fe]", "[64:ff9b::7f00:1]", "[64:ff9b:1::a00:1]", "[2002:7f00:1::1]",
+		"[::ffff:127.0.0.1]", "[::ffff:a9fe:a9fe]", "[fe80::1%25eth0]", "LOCALHOST", "foo.localhost.", "0.0.0.0",
+		"[0:0:0:0:0:0:0:1]"} {
 		if v := Check(req("GET", "https", a)); v != want {
 			t.Errorf("%s: got %+v, want %+v", a, v, want)
 		}
@@ -65,7 +70,8 @@ func TestTarget(t *testing.T) {
 }
 
 func TestAllowedAuthorities(t *testing.T) {
-	for _, a := range []string{"[2001:db8::1]:443", "example.com.", "example.com.:443"} {
+	for _, a := range []string{"[2001:db8::1]:443", "example.com.", "example.com.:443",
+		"xn--bcher-kva.de", "under_score.example.com"} {
 		if v := Check(req("GET", "https", a)); !v.OK {
 			t.Errorf("%s: got %+v, want OK", a, v)
 		}

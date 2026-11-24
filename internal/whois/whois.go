@@ -12,7 +12,11 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 )
 
-const ttl = 10 * time.Minute
+const (
+	ttl = 10 * time.Minute
+	// failTTL keeps a down tailscaled from costing every request a timeout.
+	failTTL = 5 * time.Second
+)
 
 // Caller is a tailnet node: its MagicDNS short name and its ACL tags.
 type Caller struct {
@@ -27,10 +31,11 @@ type Source interface {
 
 type entry struct {
 	caller  Caller
+	err     error
 	expires time.Time
 }
 
-// Resolver caches successful lookups per address for 10 minutes.
+// Resolver caches lookups per address: 10 minutes, failures 5 seconds.
 type Resolver struct {
 	src Source
 	now func() time.Time
@@ -48,9 +53,21 @@ func (r *Resolver) Lookup(ctx context.Context, a netip.Addr) (Caller, error) {
 	e, ok := r.cache[a]
 	r.mu.Unlock()
 	if ok && r.now().Before(e.expires) {
-		return e.caller, nil
+		return e.caller, e.err
 	}
 
+	c, err := r.query(ctx, a)
+	e = entry{caller: c, err: err, expires: r.now().Add(ttl)}
+	if err != nil {
+		e.expires = r.now().Add(failTTL)
+	}
+	r.mu.Lock()
+	r.cache[a] = e
+	r.mu.Unlock()
+	return c, err
+}
+
+func (r *Resolver) query(ctx context.Context, a netip.Addr) (Caller, error) {
 	resp, err := r.src.WhoIs(ctx, a.String())
 	if err != nil {
 		return Caller{}, err
@@ -59,10 +76,8 @@ func (r *Resolver) Lookup(ctx context.Context, a netip.Addr) (Caller, error) {
 		return Caller{}, errors.New("whois: no node in response")
 	}
 	name, _, _ := strings.Cut(strings.TrimSuffix(resp.Node.Name, "."), ".")
-	c := Caller{Node: name, Tags: resp.Node.Tags}
-
-	r.mu.Lock()
-	r.cache[a] = entry{caller: c, expires: r.now().Add(ttl)}
-	r.mu.Unlock()
-	return c, nil
+	if name == "" {
+		name = "unknown"
+	}
+	return Caller{Node: name, Tags: resp.Node.Tags}, nil
 }

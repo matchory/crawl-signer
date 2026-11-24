@@ -167,8 +167,12 @@ func (s *Server) requestHeaders(ctx context.Context, req *extprocv3.ProcessingRe
 		}
 	}
 
-	sig, err := s.signer.Headers(ctx, canon)
-	if err != nil {
+	sigAuthority := sign.SignatureAuthority(scheme, authority)
+	if sigAuthority == "" {
+		return s.refuse(md, 403, "target")
+	}
+	sig, err := s.signer.Headers(ctx, sigAuthority)
+	if err != nil || len(sig) == 0 {
 		return s.refuse(md, 503, "signing")
 	}
 
@@ -214,26 +218,27 @@ func (s *Server) requestHeaders(ctx context.Context, req *extprocv3.ProcessingRe
 	}
 }
 
-// source reads source.address from the request attributes. A non-IP address
-// means Envoy's internal unix-socket listener; the caller listener always
-// carries the tailnet IP from PROXY protocol. A missing attribute is treated
-// as an unknown caller, so a misconfigured Envoy cannot skip robots.txt.
+// source reports whether the request came in on Envoy's internal listener,
+// which carries the listener metadata crawl.internal = true, and the caller
+// address for whois. Anything else, including missing attributes, is a
+// normal caller, so robots.txt can only be skipped by Envoy's own config.
 func source(attrs map[string]*structpb.Struct) (internal bool, addr netip.Addr) {
 	for _, st := range attrs {
-		v, ok := st.GetFields()["source.address"]
-		if !ok {
-			continue
+		f := st.GetFields()
+		lm := f["xds.listener_metadata"].GetStructValue().GetFields()
+		v, ok := lm["filter_metadata"].GetStructValue().GetFields()["crawl"].GetStructValue().GetFields()["internal"].GetKind().(*structpb.Value_BoolValue)
+		if ok && v.BoolValue {
+			internal = true
 		}
-		s := v.GetStringValue()
-		if ap, err := netip.ParseAddrPort(s); err == nil {
-			return false, ap.Addr().Unmap()
+		if s := f["source.address"].GetStringValue(); s != "" {
+			if ap, err := netip.ParseAddrPort(s); err == nil {
+				addr = ap.Addr().Unmap()
+			} else if a, err := netip.ParseAddr(s); err == nil {
+				addr = a.Unmap()
+			}
 		}
-		if a, err := netip.ParseAddr(s); err == nil {
-			return false, a.Unmap()
-		}
-		return true, netip.Addr{}
 	}
-	return false, netip.Addr{}
+	return internal, addr
 }
 
 func (s *Server) refuse(md map[string]any, status int, reason string) *extprocv3.ProcessingResponse {

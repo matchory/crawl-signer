@@ -65,12 +65,13 @@ func (f *fakeRobots) Check(_ context.Context, o robots.Origin, path string) robo
 
 type fakeSigner struct {
 	err   error
+	empty bool
 	calls []string
 }
 
 func (f *fakeSigner) Headers(_ context.Context, authority string) ([]rules.Header, error) {
 	f.calls = append(f.calls, authority)
-	if f.err != nil {
+	if f.err != nil || f.empty {
 		return nil, f.err
 	}
 	return []rules.Header{
@@ -137,6 +138,19 @@ func request(source string, kv ...string) *extprocv3.ProcessingRequest {
 			"source.address": structpb.NewStringValue(source),
 		}}}
 	}
+	return r
+}
+
+// internalListener marks r as arriving on Envoy's internal listener.
+func internalListener(r *extprocv3.ProcessingRequest) *extprocv3.ProcessingRequest {
+	md, err := structpb.NewStruct(map[string]any{"filter_metadata": map[string]any{"crawl": map[string]any{"internal": true}}})
+	if err != nil {
+		panic(err)
+	}
+	if r.Attributes == nil {
+		r.Attributes = map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{}}}
+	}
+	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(md)
 	return r
 }
 
@@ -230,6 +244,10 @@ func TestSigningRefusal(t *testing.T) {
 	f := newFixture()
 	f.signer.err = errors.New("transit down")
 	assertRefusal(t, f.run(t, request(callerAddr)), 503, "signing")
+
+	f = newFixture()
+	f.signer.empty = true
+	assertRefusal(t, f.run(t, request(callerAddr)), 503, "signing")
 }
 
 func TestSchemeHeader(t *testing.T) {
@@ -300,6 +318,13 @@ func TestAuthorityFromPseudoHeader(t *testing.T) {
 	if !slices.Equal(f.signer.calls, []string{"a.example"}) {
 		t.Errorf("signed for %v, want a.example", f.signer.calls)
 	}
+
+	// Envoy forwards a trailing dot, so the signature keeps it; robots does not.
+	f = newFixture()
+	f.run(t, request(callerAddr, ":authority", "A.Example.:443"))
+	if f.robots.calls[0].origin.Authority != "a.example" || !slices.Equal(f.signer.calls, []string{"a.example."}) {
+		t.Errorf("robots %+v, signed for %v", f.robots.calls, f.signer.calls)
+	}
 }
 
 func TestCaller(t *testing.T) {
@@ -329,10 +354,10 @@ func TestCaller(t *testing.T) {
 }
 
 func TestInternalListener(t *testing.T) {
-	for _, src := range []string{"", "/run/envoy/internal.sock", "envoy://internal_client_address/"} {
+	for _, src := range []string{"-", "", "/run/envoy/internal.sock"} {
 		f := newFixture()
 		f.robots.outcome = robots.Disallowed
-		r := f.run(t, request(src, ":path", "/elsewhere/robots.txt", "cookie", "x"))
+		r := f.run(t, internalListener(request(src, ":path", "/elsewhere/robots.txt", "cookie", "x")))
 		_, remove := mutation(t, r)
 		if len(f.robots.calls) != 0 || len(f.whois.calls) != 0 {
 			t.Errorf("%q: robots %v, whois %v", src, f.robots.calls, f.whois.calls)
@@ -348,18 +373,30 @@ func TestInternalListener(t *testing.T) {
 
 	// Static rules still apply to the signer's own fetches.
 	f := newFixture()
-	assertRefusal(t, f.run(t, request("", ":authority", "127.0.0.1")), 403, "target")
+	assertRefusal(t, f.run(t, internalListener(request("", ":authority", "127.0.0.1"))), 403, "target")
 }
 
-func TestMissingSourceIsNotInternal(t *testing.T) {
-	f := newFixture()
-	r := f.run(t, request("-"))
-	mutation(t, r)
-	if len(f.robots.calls) != 1 {
-		t.Error("robots skipped without a source address")
+func TestOnlyListenerMetadataMakesInternal(t *testing.T) {
+	for _, src := range []string{"-", "", "/run/envoy/internal.sock", "envoy://internal_client_address/"} {
+		f := newFixture()
+		r := f.run(t, request(src))
+		mutation(t, r)
+		if len(f.robots.calls) != 1 {
+			t.Errorf("%q: robots skipped without listener metadata", src)
+		}
+		if c := meta(t, r)["caller"].GetStringValue(); c != "unknown" {
+			t.Errorf("%q: caller %q", src, c)
+		}
 	}
-	if c := meta(t, r)["caller"].GetStringValue(); c != "unknown" {
-		t.Errorf("caller: %q", c)
+
+	// internal must be the boolean true.
+	f := newFixture()
+	r := request(callerAddr)
+	md, _ := structpb.NewStruct(map[string]any{"filter_metadata": map[string]any{"crawl": map[string]any{"internal": "true"}}})
+	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(md)
+	f.run(t, r)
+	if len(f.robots.calls) != 1 {
+		t.Error("a string internal skipped robots")
 	}
 }
 

@@ -32,6 +32,23 @@ func CanonicalAuthority(scheme, authority string) string {
 	return host
 }
 
+// SignatureAuthority is the RFC 9421 @authority for the :authority Envoy
+// forwards upstream: lowercased and without the scheme's default port, but
+// with a trailing dot kept, since Envoy sends it as received. It returns ""
+// for an authority Headers would refuse.
+func SignatureAuthority(scheme, authority string) string {
+	a := strings.ToLower(authority)
+	if i := strings.LastIndex(a, ":"); i >= 0 && !strings.HasSuffix(a, "]") {
+		if port := a[i+1:]; (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+			a = a[:i]
+		}
+	}
+	if c := CanonicalAuthority("", a); c == "" || c[0] == ':' {
+		return ""
+	}
+	return a
+}
+
 // Base returns the RFC 9421 signature base and the Signature-Input value.
 func Base(authority, agent, keyid string, created, expires int64) (base, input string) {
 	params := fmt.Sprintf(`("@authority" "signature-agent";key="sig1");created=%d;expires=%d;keyid=%q;alg="ed25519";tag="web-bot-auth"`,

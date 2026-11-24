@@ -10,10 +10,7 @@ jobs:
     env:
       TAG: ${{ github.ref_name }}
       PREFIX: s3://matchory-artifacts/crawl-signer/${{ github.ref_name }}/
-      AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACTS_S3_ACCESS_KEY }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACTS_S3_SECRET_KEY }}
-      AWS_DEFAULT_REGION: fsn1
-      AWS_ENDPOINT_URL: https://fsn1.your-objectstorage.com
+      ENDPOINT: https://fsn1.your-objectstorage.com
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -36,9 +33,13 @@ jobs:
           done
           cd dist && sha256sum crawl-signer-* > checksums.txt && cat checksums.txt
       - name: Refuse an existing version
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACTS_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACTS_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: fsn1
         run: |
           # shellcheck disable=SC2016 # the backticks are a JMESPath literal
-          n=$(aws s3api list-objects-v2 --endpoint-url "$AWS_ENDPOINT_URL" \
+          n=$(aws s3api list-objects-v2 --endpoint-url "$ENDPOINT" \
             --bucket matchory-artifacts --prefix "crawl-signer/$TAG/" \
             --query 'length(Contents || `[]`)' --output text)
           if [ "$n" != 0 ]; then
@@ -46,7 +47,11 @@ jobs:
             exit 1
           fi
       - name: Upload
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACTS_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACTS_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: fsn1
         run: |
           for f in dist/*; do
-            aws s3 cp --endpoint-url "$AWS_ENDPOINT_URL" "$f" "$PREFIX"
+            aws s3 cp --endpoint-url "$ENDPOINT" "$f" "$PREFIX"
           done

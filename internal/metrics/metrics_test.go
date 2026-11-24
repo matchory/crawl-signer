@@ -93,4 +93,3 @@ crawl_signer_transit_sign_total{result="ok"} 1
 		t.Errorf("sign histogram: %d series", n)
 	}
 }
-

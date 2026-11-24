@@ -315,3 +315,20 @@ func TestHeadersAreCopies(t *testing.T) {
 		t.Error("cached slice was mutated through the returned one")
 	}
 }
+
+func TestSignatureAuthority(t *testing.T) {
+	for _, c := range []struct{ scheme, in, want string }{
+		{"https", "A.Example.:443", "a.example."},
+		{"https", "Example.com", "example.com"},
+		{"http", "example.com:80", "example.com"},
+		{"https", "example.com:80", "example.com:80"},
+		{"http", "example.com:443", "example.com:443"},
+		{"https", "a b.com", ""},
+		{"https", "", ""},
+		{"https", ":443", ""},
+	} {
+		if got := SignatureAuthority(c.scheme, c.in); got != c.want {
+			t.Errorf("%s %s: got %q, want %q", c.scheme, c.in, got, c.want)
+		}
+	}
+}

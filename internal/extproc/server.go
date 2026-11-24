@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/netip"
 	"strings"
-	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -27,7 +26,6 @@ const (
 	schemeHeader   = "x-crawl-scheme"
 	upstreamHeader = "x-crawl-upstream"
 	namespace      = "crawl"
-	whoisTimeout   = 2 * time.Second
 )
 
 type Robots interface {
@@ -98,9 +96,7 @@ func (s *Server) requestHeaders(ctx context.Context, req *extprocv3.ProcessingRe
 	if internal {
 		md["caller"] = "internal"
 	} else if addr.IsValid() {
-		wctx, cancel := context.WithTimeout(ctx, whoisTimeout)
-		c, err := s.whois.Lookup(wctx, addr)
-		cancel()
+		c, err := s.whois.Lookup(ctx, addr)
 		if err == nil {
 			tags := make([]any, len(c.Tags))
 			for i, t := range c.Tags {
@@ -226,9 +222,12 @@ func source(attrs map[string]*structpb.Struct) (internal bool, addr netip.Addr) 
 	for _, st := range attrs {
 		f := st.GetFields()
 		lm := f["xds.listener_metadata"].GetStructValue().GetFields()
-		v, ok := lm["filter_metadata"].GetStructValue().GetFields()["crawl"].GetStructValue().GetFields()["internal"].GetKind().(*structpb.Value_BoolValue)
-		if ok && v.BoolValue {
-			internal = true
+		// Envoy's struct conversion may use the proto or the JSON field name.
+		for _, key := range []string{"filter_metadata", "filterMetadata"} {
+			v, ok := lm[key].GetStructValue().GetFields()["crawl"].GetStructValue().GetFields()["internal"].GetKind().(*structpb.Value_BoolValue)
+			if ok && v.BoolValue {
+				internal = true
+			}
 		}
 		if s := f["source.address"].GetStringValue(); s != "" {
 			if ap, err := netip.ParseAddrPort(s); err == nil {

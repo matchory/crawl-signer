@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,12 +16,29 @@ import (
 type fakeSource struct {
 	resp  *apitype.WhoIsResponse
 	err   error
+	gate  chan struct{} // if set, WhoIs waits for it or for ctx
+	mu    sync.Mutex
 	calls []string
 }
 
-func (f *fakeSource) WhoIs(_ context.Context, addr string) (*apitype.WhoIsResponse, error) {
+func (f *fakeSource) WhoIs(ctx context.Context, addr string) (*apitype.WhoIsResponse, error) {
+	f.mu.Lock()
 	f.calls = append(f.calls, addr)
+	f.mu.Unlock()
+	if f.gate != nil {
+		select {
+		case <-f.gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return f.resp, f.err
+}
+
+func (f *fakeSource) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
 }
 
 var addr = netip.MustParseAddr("100.101.102.103")
@@ -83,5 +101,56 @@ func TestLookupEmptyName(t *testing.T) {
 	c, err := New(src, time.Now).Lookup(context.Background(), addr)
 	if err != nil || c.Node != "unknown" {
 		t.Errorf("got %+v, %v", c, err)
+	}
+}
+
+func TestCallerCancelNotCached(t *testing.T) {
+	src := &fakeSource{gate: make(chan struct{}), resp: &apitype.WhoIsResponse{Node: &tailcfg.Node{Name: "whale-1.ts.net."}}}
+	r := New(src, time.Now)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.Lookup(ctx, addr); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+	close(src.gate)
+	c, err := r.Lookup(context.Background(), addr)
+	if err != nil || c.Node != "whale-1" {
+		t.Errorf("caller's cancellation was cached: %+v, %v", c, err)
+	}
+}
+
+func TestLookupTimeoutCached(t *testing.T) {
+	old := timeout
+	timeout = 10 * time.Millisecond
+	defer func() { timeout = old }()
+	src := &fakeSource{gate: make(chan struct{})}
+	r := New(src, time.Now)
+	if _, err := r.Lookup(context.Background(), addr); err == nil {
+		t.Fatal("want timeout error")
+	}
+	if _, err := r.Lookup(context.Background(), addr); err == nil || src.count() != 1 {
+		t.Errorf("a hung tailscaled was not negative-cached: %v, %d calls", err, src.count())
+	}
+}
+
+func TestConcurrentLookupsShareOneQuery(t *testing.T) {
+	src := &fakeSource{gate: make(chan struct{}), resp: &apitype.WhoIsResponse{Node: &tailcfg.Node{Name: "whale-1.ts.net."}}}
+	r := New(src, time.Now)
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.Lookup(context.Background(), addr)
+		}()
+	}
+	for src.count() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(src.gate)
+	wg.Wait()
+	if n := src.count(); n != 1 {
+		t.Errorf("%d LocalAPI calls, want 1", n)
 	}
 }

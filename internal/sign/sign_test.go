@@ -28,6 +28,11 @@ func TestCanonicalAuthority(t *testing.T) {
 		{"https", "bücher.de", "xn--bcher-kva.de"},
 		{"https", "Example.com.", "example.com"},
 		{"https", "a b.com", ""},
+		{"https", "[2001:DB8::1]:443", "[2001:db8::1]"},
+		{"https", "[2001:db8:0::1]:8443", "[2001:db8::1]:8443"},
+		{"https", "[fe80::1%eth0]", ""},
+		{"https", "[example.com]", ""},
+		{"https", "[1.2.3.4]", ""},
 	} {
 		if got := CanonicalAuthority(c.scheme, c.in); got != c.want {
 			t.Errorf("%s %s: got %q, want %q", c.scheme, c.in, got, c.want)
@@ -324,6 +329,9 @@ func TestSignatureAuthority(t *testing.T) {
 		{"https", "example.com:80", "example.com:80"},
 		{"http", "example.com:443", "example.com:443"},
 		{"https", "a b.com", ""},
+		{"https", "[2001:DB8::1]:443", "[2001:db8::1]"},
+		{"http", "[2001:db8::1]:443", "[2001:db8::1]:443"},
+		{"https", "[example.com]", ""},
 		{"https", "", ""},
 		{"https", ":443", ""},
 	} {

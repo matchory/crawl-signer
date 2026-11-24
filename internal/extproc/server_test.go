@@ -376,6 +376,33 @@ func TestInternalListener(t *testing.T) {
 	assertRefusal(t, f.run(t, internalListener(request("", ":authority", "127.0.0.1"))), 403, "target")
 }
 
+func TestCamelCaseListenerMetadata(t *testing.T) {
+	f := newFixture()
+	r := request("")
+	md, _ := structpb.NewStruct(map[string]any{"filterMetadata": map[string]any{"crawl": map[string]any{"internal": true}}})
+	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(md)
+	mutation(t, f.run(t, r))
+	if len(f.robots.calls) != 0 {
+		t.Error("filterMetadata not recognised as internal")
+	}
+}
+
+func TestIPv6Literal(t *testing.T) {
+	f := newFixture()
+	mutation(t, f.run(t, request(callerAddr, ":authority", "[2001:DB8::1]:443")))
+	if f.robots.calls[0].origin.Authority != "[2001:db8::1]" || !slices.Equal(f.signer.calls, []string{"[2001:db8::1]"}) {
+		t.Errorf("robots %+v, signed for %v", f.robots.calls, f.signer.calls)
+	}
+}
+
+func TestEmptyPortRefused(t *testing.T) {
+	f := newFixture()
+	assertRefusal(t, f.run(t, request(callerAddr, ":authority", "example.com:")), 403, "target")
+	if len(f.signer.calls)+len(f.robots.calls) != 0 {
+		t.Error("an empty port reached robots or the signer")
+	}
+}
+
 func TestOnlyListenerMetadataMakesInternal(t *testing.T) {
 	for _, src := range []string{"-", "", "/run/envoy/internal.sock", "envoy://internal_client_address/"} {
 		f := newFixture()

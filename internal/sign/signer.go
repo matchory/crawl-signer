@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	window  = 60 // seconds a signature stays valid
-	refresh = 10 // re-sign this many seconds before expiry
+	step     = 30 // created is aligned to this many seconds
+	validity = 60 // seconds a signature stays valid
+	refresh  = 10 // re-sign this many seconds before expiry
 )
 
 // Backend signs a message with the Ed25519 key.
@@ -27,15 +28,16 @@ type entry struct {
 	expires int64
 }
 
-// Signer caches one signature per authority and 60 s window.
+// Signer caches one signature per authority; a signature is valid for 60 s.
 type Signer struct {
 	b   Backend
 	cfg config.Config
 	now func() time.Time
 
-	mu    sync.Mutex
-	cache map[string]entry
-	group singleflight.Group
+	mu        sync.Mutex
+	cache     map[string]entry
+	lastSweep int64
+	group     singleflight.Group
 }
 
 func NewSigner(b Backend, cfg config.Config, now func() time.Time) *Signer {
@@ -48,22 +50,28 @@ func (s *Signer) Headers(ctx context.Context, authority string) ([]rules.Header,
 	now := s.now().Unix()
 
 	s.mu.Lock()
-	for k, e := range s.cache {
-		if now >= e.expires {
-			delete(s.cache, k)
+	if now != s.lastSweep {
+		s.lastSweep = now
+		for k, e := range s.cache {
+			if now >= e.expires {
+				delete(s.cache, k)
+			}
 		}
 	}
 	e, ok := s.cache[authority]
 	s.mu.Unlock()
+	if ok && now >= e.expires {
+		ok = false
+	}
 	if ok && now < e.expires-refresh {
-		return e.headers, nil
+		return clone(e.headers), nil
 	}
 
 	v, err, _ := s.group.Do(authority, func() (any, error) {
-		created := now - now%window
-		expires := created + window
+		created := now - now%step
+		expires := created + validity
 		base, input := Base(authority, s.cfg.SignatureAgent, s.cfg.KeyID, created, expires)
-		sig, err := s.b.Sign(ctx, []byte(base))
+		sig, err := s.b.Sign(context.WithoutCancel(ctx), []byte(base))
 		if err != nil {
 			return nil, err
 		}
@@ -79,9 +87,11 @@ func (s *Signer) Headers(ctx context.Context, authority string) ([]rules.Header,
 	})
 	if err != nil {
 		if ok {
-			return e.headers, nil
+			return clone(e.headers), nil
 		}
 		return nil, err
 	}
-	return v.(entry).headers, nil
+	return clone(v.(entry).headers), nil
 }
+
+func clone(h []rules.Header) []rules.Header { return append([]rules.Header(nil), h...) }

@@ -43,6 +43,14 @@ func (c Config) validate() error {
 			return fmt.Errorf("config: %s is required", name)
 		}
 	}
+	// Both values are embedded in quoted structured-field strings.
+	for name, v := range map[string]string{"keyid": c.KeyID, "signature_agent": c.SignatureAgent} {
+		for _, r := range v {
+			if r < 0x20 || r > 0x7e || r == '"' || r == '\\' {
+				return fmt.Errorf("config: %s contains a character not allowed in a structured-field string", name)
+			}
+		}
+	}
 	if c.KeyVersion < 1 {
 		return fmt.Errorf("config: key_version must be >= 1")
 	}

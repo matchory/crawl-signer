@@ -57,3 +57,15 @@ func TestLoadRejectsMissingFields(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadRejectsUnsafeSFStrings(t *testing.T) {
+	for _, bad := range []string{`a\"b`, `a\\\\b`, `a\nb`, `bü`} {
+		for _, f := range []string{`"keyid":"kid"`, `"signature_agent":"sig.example"`} {
+			name, _, _ := strings.Cut(f, ":")
+			body := strings.Replace(valid, f, name+`:"`+bad+`"`, 1)
+			if _, err := Load(write(t, body)); err == nil {
+				t.Errorf("%s=%s: want error", name, bad)
+			}
+		}
+	}
+}

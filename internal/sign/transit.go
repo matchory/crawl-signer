@@ -6,13 +6,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
-const transitTimeout = 2 * time.Second
+const (
+	transitTimeout = 2 * time.Second
+	maxResponse    = 64 << 10
+)
 
 // Transit signs through the OpenBao Proxy's unix socket, which injects the
 // token; no credential is handled here.
@@ -20,9 +25,19 @@ type Transit struct {
 	Socket  string
 	Key     string
 	Version int
+
+	client *http.Client
 }
 
-func (t Transit) Sign(ctx context.Context, msg []byte) ([]byte, error) {
+func NewTransit(socket, key string, version int) *Transit {
+	return &Transit{Socket: socket, Key: key, Version: version, client: &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		},
+	}}}
+}
+
+func (t *Transit) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, transitTimeout)
 	defer cancel()
 
@@ -33,19 +48,13 @@ func (t Transit) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://bao/v1/transit/sign/"+t.Key, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://bao/v1/transit/sign/"+url.PathEscape(t.Key), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", t.Socket)
-		},
-		DisableKeepAlives: true,
-	}}
-	resp, err := client.Do(req)
+	resp, err := t.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("transit sign: %w", err)
 	}
@@ -58,7 +67,7 @@ func (t Transit) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 			Signature string `json:"signature"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponse)).Decode(&out); err != nil {
 		return nil, fmt.Errorf("transit sign: decode: %w", err)
 	}
 	// "vault:v<N>:<base64>"

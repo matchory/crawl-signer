@@ -66,11 +66,14 @@ var waitTimeout = 10 * time.Second
 // TTL is how long a fetch result is used before the next fetch. failures is
 // the number of consecutive failed fetches before this one.
 func TTL(r Result, failures int) time.Duration {
-	if usable(r.Status) {
+	if r.Status >= 200 && r.Status < 300 {
 		if !r.HasMaxAge {
 			return maxTTL
 		}
 		return min(max(r.MaxAge, minTTL), maxTTL)
+	}
+	if usable(r.Status) {
+		return maxTTL
 	}
 	d := firstBackoff
 	for range failures {
@@ -91,8 +94,9 @@ func usable(status int) bool {
 type entry struct {
 	key      string
 	rules    Rules
-	good     bool      // rules come from a 2xx/4xx fetch
+	good     bool      // rules come from a 2xx fetch and may be used stale
 	goodAt   time.Time // when rules were fetched
+	allowAll bool      // a 4xx said "no robots.txt"; only valid until expires
 	expires  time.Time
 	failures int
 	elem     *list.Element
@@ -136,6 +140,10 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 	}
 
 	ch := c.group.DoChan(key, func() (any, error) {
+		// A flight that finished just before this one started has already refreshed the entry.
+		if e, ok := c.lookup(key); ok && c.now().Before(e.expires) {
+			return e, nil
+		}
 		fctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 		defer cancel()
 		r, err := c.f.Fetch(fctx, o)
@@ -157,6 +165,9 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 }
 
 func (c *Cache) decide(e entry, path string) Outcome {
+	if e.allowAll {
+		return Allowed
+	}
 	if !e.good || c.now().Sub(e.goodAt) > maxStale {
 		return Unavailable
 	}
@@ -194,12 +205,13 @@ func (c *Cache) store(key string, r Result, err error) entry {
 	}
 	switch {
 	case err == nil && r.Status >= 200 && r.Status < 300:
-		e.rules, e.good, e.goodAt, e.failures = Parse(r.Body, Agent), true, now, 0
+		e.rules, e.good, e.goodAt, e.allowAll, e.failures = Parse(r.Body, Agent), true, now, false, 0
 		e.expires = now.Add(TTL(r, 0))
 	case err == nil && usable(r.Status):
-		e.rules, e.good, e.goodAt, e.failures = Rules{}, true, now, 0
+		e.rules, e.good, e.allowAll, e.failures = Rules{}, false, true, 0
 		e.expires = now.Add(TTL(r, 0))
 	default:
+		e.allowAll = false
 		if err != nil {
 			r = Result{}
 		}

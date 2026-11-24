@@ -87,6 +87,11 @@ func TestFetchEdgeCases(t *testing.T) {
 				return
 			}
 			fmt.Fprint(w, "User-agent: *\nDisallow: /rel\n")
+		case r.Host == "refused.example":
+			w.Header().Set("X-Crawl-Gateway-Refusal", "destination not allowed")
+			http.Error(w, "refused", http.StatusForbidden)
+		case r.Host == "oneline.example":
+			fmt.Fprint(w, "User-agent: * Disallow: /"+strings.Repeat("x", 2<<20))
 		case r.Host == "big.example":
 			fmt.Fprint(w, big)
 		case r.Host == "html.example":
@@ -141,6 +146,26 @@ func TestFetchEdgeCases(t *testing.T) {
 		}
 		if got := c.Check(ctx, o("big.example"), "/late"); got != Allowed {
 			t.Errorf("Check(/late) = %v, want Allowed", got)
+		}
+	})
+	t.Run("gateway refusal is a failure, not a 4xx", func(t *testing.T) {
+		if _, err := f.Fetch(ctx, o("refused.example")); err == nil {
+			t.Error("Fetch: want an error")
+		}
+		if got := c.Check(ctx, o("refused.example"), "/"); got != Unavailable {
+			t.Errorf("Check = %v, want Unavailable", got)
+		}
+	})
+	t.Run("no newline before the cut parses nothing", func(t *testing.T) {
+		res, err := f.Fetch(ctx, o("oneline.example"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Body) != 0 {
+			t.Errorf("body %d bytes, want none", len(res.Body))
+		}
+		if got := c.Check(ctx, o("oneline.example"), "/"); got != Allowed {
+			t.Errorf("Check = %v, want Allowed", got)
 		}
 	})
 	t.Run("HTML 200 allows", func(t *testing.T) {

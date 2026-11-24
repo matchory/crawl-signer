@@ -20,6 +20,10 @@ const (
 	maxRedirects = 5
 	// maxBody is RFC 9309's minimum parse limit; bytes past it are dropped.
 	maxBody = 500 << 10
+	// maxDrain is how much of a discarded body is read so the connection can be reused.
+	maxDrain = 4 << 10
+	// refusalHeader marks a response the gateway made itself, not the origin's.
+	refusalHeader = "X-Crawl-Gateway-Refusal"
 )
 
 // HTTPFetcher fetches robots.txt through Envoy's internal listener on Socket,
@@ -63,12 +67,15 @@ func (f *HTTPFetcher) Fetch(ctx context.Context, o Origin) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
+		if resp.Header.Get(refusalHeader) != "" {
+			discard(resp)
+			return Result{}, fmt.Errorf("robots.txt for %s: gateway refused: %s", o.Authority, resp.Header.Get(refusalHeader))
+		}
 		loc := resp.Header.Get("Location")
 		if resp.StatusCode < 300 || resp.StatusCode >= 400 || loc == "" {
-			defer resp.Body.Close()
 			return read(resp)
 		}
-		resp.Body.Close()
+		discard(resp)
 		if hop == maxRedirects {
 			return Result{}, fmt.Errorf("robots.txt for %s: more than %d redirects", o.Authority, maxRedirects)
 		}
@@ -103,8 +110,10 @@ func read(resp *http.Response) (Result, error) {
 	r := Result{Status: resp.StatusCode}
 	r.MaxAge, r.HasMaxAge = maxAge(resp.Header.Values("Cache-Control"))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		discard(resp)
 		return r, nil
 	}
+	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		return Result{}, err
@@ -112,12 +121,15 @@ func read(resp *http.Response) (Result, error) {
 	if len(body) > maxBody {
 		// Drop the partial last line so a cut pattern cannot become a rule.
 		body = body[:maxBody]
-		if i := bytes.LastIndexAny(body, "\r\n"); i >= 0 {
-			body = body[:i+1]
-		}
+		body = body[:bytes.LastIndexAny(body, "\r\n")+1]
 	}
 	r.Body = body
 	return r, nil
+}
+
+func discard(resp *http.Response) {
+	io.CopyN(io.Discard, resp.Body, maxDrain)
+	resp.Body.Close()
 }
 
 func maxAge(values []string) (time.Duration, bool) {

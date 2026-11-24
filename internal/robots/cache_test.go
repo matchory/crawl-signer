@@ -77,6 +77,7 @@ func TestTTL(t *testing.T) {
 		{"max-age above the cap", Result{Status: 200, HasMaxAge: true, MaxAge: 172800 * time.Second}, 0, 24 * time.Hour},
 		{"max-age within bounds", Result{Status: 200, HasMaxAge: true, MaxAge: 2 * time.Hour}, 0, 2 * time.Hour},
 		{"404", Result{Status: 404}, 0, 24 * time.Hour},
+		{"404 ignores max-age", Result{Status: 404, HasMaxAge: true, MaxAge: time.Hour}, 0, 24 * time.Hour},
 		{"5xx first failure", Result{Status: 503}, 0, 5 * time.Minute},
 		{"5xx second failure", Result{Status: 503}, 1, 10 * time.Minute},
 		{"5xx third failure", Result{Status: 503}, 2, 20 * time.Minute},
@@ -133,6 +134,30 @@ func TestStaleOnError(t *testing.T) {
 	clk.advance(21 * 24 * time.Hour)
 	if got := c.Check(ctx, example, "/a"); got != Unavailable {
 		t.Fatalf("31 days: Check(/a) = %v, want Unavailable", got)
+	}
+}
+
+func TestNotFoundIsNoStaleFallback(t *testing.T) {
+	for _, first := range []string{"404 first", "200 then 404"} {
+		t.Run(first, func(t *testing.T) {
+			clk := newClock()
+			f := newFake(body("User-agent: *\nDisallow: /x\n"))
+			c := NewCache(f, 1<<20, clk.now)
+			ctx := context.Background()
+			if first == "200 then 404" {
+				c.Check(ctx, example, "/a")
+				clk.advance(25 * time.Hour)
+			}
+			f.set(func(Origin) (Result, error) { return Result{Status: 404}, nil })
+			if got := c.Check(ctx, example, "/x"); got != Allowed {
+				t.Fatalf("after 404: %v, want Allowed", got)
+			}
+			f.set(func(Origin) (Result, error) { return Result{Status: 503}, nil })
+			clk.advance(25 * time.Hour)
+			if got := c.Check(ctx, example, "/a"); got != Unavailable {
+				t.Fatalf("503 after 404: %v, want Unavailable", got)
+			}
+		})
 	}
 }
 

@@ -30,5 +30,24 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return c, fmt.Errorf("parse %s: %w", path, err)
 	}
-	return c, nil
+	return c, c.validate()
+}
+
+func (c Config) validate() error {
+	for name, v := range map[string]string{
+		"listen": c.Listen, "bao_socket": c.BaoSocket, "envoy_socket": c.EnvoySocket,
+		"transit_key": c.TransitKey, "keyid": c.KeyID, "signature_agent": c.SignatureAgent,
+		"user_agent": c.UserAgent,
+	} {
+		if v == "" {
+			return fmt.Errorf("config: %s is required", name)
+		}
+	}
+	if c.KeyVersion < 1 {
+		return fmt.Errorf("config: key_version must be >= 1")
+	}
+	if c.RobotsCacheBytes <= 0 {
+		return fmt.Errorf("config: robots_cache_bytes must be > 0")
+	}
+	return nil
 }

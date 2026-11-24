@@ -51,7 +51,8 @@ func TestPort(t *testing.T) {
 
 func TestTarget(t *testing.T) {
 	want := Verdict{false, 403, "target"}
-	for _, a := range []string{"10.0.0.1", "[fd7a::1]", "169.254.169.254", "localhost", "foo.localhost:443", "[::1]:443"} {
+	for _, a := range []string{"10.0.0.1", "[fd7a::1]", "169.254.169.254", "localhost", "foo.localhost:443", "[::1]:443",
+		"evil@127.0.0.1", "example.com:", "127.1", "0x7f.0.0.1", "2130706433", "017700000001"} {
 		if v := Check(req("GET", "https", a)); v != want {
 			t.Errorf("%s: got %+v, want %+v", a, v, want)
 		}
@@ -61,12 +62,24 @@ func TestTarget(t *testing.T) {
 	}
 }
 
+func TestNonHTTPSchemeIs403Scheme(t *testing.T) {
+	want := Verdict{false, 403, "scheme"}
+	for _, sc := range []string{"", "ftp", "file"} {
+		if v := Check(req("GET", sc, "example.com")); v != want {
+			t.Errorf("scheme %q: got %+v, want %+v", sc, v, want)
+		}
+	}
+}
+
 func TestAllowlist(t *testing.T) {
 	in := []Header{{"Cookie", "a"}, {"Authorization", "b"}, {"User-Agent", "c"}, {"accept", "d"},
-		{"Range", "e"}, {"X-Forwarded-For", "f"}, {"Signature", "g"}}
+		{"Range", "e"}, {"X-Forwarded-For", "f"}, {"Signature", "g"},
+		{"ACCEPT-LANGUAGE", "h"}, {"Accept-Encoding", "i"}, {"If-None-Match", "j"}, {"if-modified-since", "k"}}
 	keep, drop := Allowlist(in)
-	if want := []Header{{"accept", "d"}, {"Range", "e"}}; !reflect.DeepEqual(keep, want) {
-		t.Errorf("keep = %v, want %v", keep, want)
+	wantKeep := []Header{{"accept", "d"}, {"Range", "e"}, {"ACCEPT-LANGUAGE", "h"}, {"Accept-Encoding", "i"},
+		{"If-None-Match", "j"}, {"if-modified-since", "k"}}
+	if !reflect.DeepEqual(keep, wantKeep) {
+		t.Errorf("keep = %v, want %v", keep, wantKeep)
 	}
 	if want := []string{"Cookie", "Authorization", "User-Agent", "X-Forwarded-For", "Signature"}; !reflect.DeepEqual(drop, want) {
 		t.Errorf("drop = %v, want %v", drop, want)

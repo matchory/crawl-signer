@@ -50,8 +50,19 @@ func Check(r Request) Verdict {
 		}
 	}
 
+	if r.Scheme != "http" && r.Scheme != "https" {
+		return Verdict{false, 403, "scheme"}
+	}
+
+	// Userinfo would make the authority disagree with what the upstream dials.
+	if strings.Contains(r.Authority, "@") {
+		return Verdict{false, 403, "target"}
+	}
 	host, port := r.Authority, ""
 	if h, p, err := net.SplitHostPort(r.Authority); err == nil {
+		if p == "" {
+			return Verdict{false, 403, "target"}
+		}
 		host, port = h, p
 	} else {
 		host = strings.TrimSuffix(strings.TrimPrefix(r.Authority, "["), "]")
@@ -78,6 +89,11 @@ func isInternal(host string) bool {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
+	if looksNumeric(host) {
+		if a, err := netip.ParseAddr(host); err != nil || !a.Is4() {
+			return true
+		}
+	}
 	// Zone IDs and IPv4-mapped forms must not slip past the prefix match.
 	addr, err := netip.ParseAddr(host)
 	if err != nil {
@@ -92,7 +108,20 @@ func isInternal(host string) bool {
 	return false
 }
 
-var allowed = map[string]bool{"accept": true, "range": true}
+// looksNumeric spots forms like 127.1, 0x7f.1 or 2130706433 that resolvers
+// read as IPv4 but netip rejects, so they would otherwise pass as hostnames.
+func looksNumeric(host string) bool {
+	last := host[strings.LastIndexByte(host, '.')+1:]
+	if last == "" || last[0] < '0' || last[0] > '9' {
+		return false
+	}
+	return strings.Trim(host, "0123456789abcdefABCDEFxX.") == ""
+}
+
+var allowed = map[string]bool{
+	"accept": true, "accept-language": true, "accept-encoding": true,
+	"if-none-match": true, "if-modified-since": true, "range": true,
+}
 
 // Allowlist keeps only headers the gateway lets through and names the rest.
 func Allowlist(h []Header) (keep []Header, drop []string) {

@@ -52,13 +52,20 @@ func TestPort(t *testing.T) {
 func TestTarget(t *testing.T) {
 	want := Verdict{false, 403, "target"}
 	for _, a := range []string{"10.0.0.1", "[fd7a::1]", "169.254.169.254", "localhost", "foo.localhost:443", "[::1]:443",
-		"evil@127.0.0.1", "example.com:", "127.1", "0x7f.0.0.1", "2130706433", "017700000001"} {
+		"evil@127.0.0.1", "example.com:", "127.1", "0x7f.0.0.1", "2130706433", "017700000001",
+		":443", "127.1..", "localhost..", "::1:443"} {
 		if v := Check(req("GET", "https", a)); v != want {
 			t.Errorf("%s: got %+v, want %+v", a, v, want)
 		}
 	}
 	if v := Check(req("GET", "https", "93.184.215.14")); !v.OK {
 		t.Errorf("public ip: got %+v", v)
+	}
+}
+
+func TestSchemeCaseInsensitive(t *testing.T) {
+	if v := Check(req("GET", "HTTPS", "example.com:443")); !v.OK {
+		t.Errorf("HTTPS: got %+v, want OK", v)
 	}
 }
 

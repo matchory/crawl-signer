@@ -50,12 +50,17 @@ func Check(r Request) Verdict {
 		}
 	}
 
-	if r.Scheme != "http" && r.Scheme != "https" {
+	scheme := strings.ToLower(r.Scheme)
+	if scheme != "http" && scheme != "https" {
 		return Verdict{false, 403, "scheme"}
 	}
 
 	// Userinfo would make the authority disagree with what the upstream dials.
 	if strings.Contains(r.Authority, "@") {
+		return Verdict{false, 403, "target"}
+	}
+	// An unbracketed IPv6 literal is ambiguous with host:port.
+	if strings.Count(r.Authority, ":") > 1 && !strings.HasPrefix(r.Authority, "[") {
 		return Verdict{false, 403, "target"}
 	}
 	host, port := r.Authority, ""
@@ -67,8 +72,11 @@ func Check(r Request) Verdict {
 	} else {
 		host = strings.TrimSuffix(strings.TrimPrefix(r.Authority, "["), "]")
 	}
+	if host == "" {
+		return Verdict{false, 403, "target"}
+	}
 	want := "80"
-	if r.Scheme == "https" {
+	if scheme == "https" {
 		want = "443"
 	}
 	if port == "" {
@@ -85,7 +93,7 @@ func Check(r Request) Verdict {
 }
 
 func isInternal(host string) bool {
-	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	host = strings.TrimRight(strings.ToLower(host), ".")
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}

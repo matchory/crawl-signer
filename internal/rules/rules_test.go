@@ -53,13 +53,22 @@ func TestTarget(t *testing.T) {
 	want := Verdict{false, 403, "target"}
 	for _, a := range []string{"10.0.0.1", "[fd7a::1]", "169.254.169.254", "localhost", "foo.localhost:443", "[::1]:443",
 		"evil@127.0.0.1", "example.com:", "127.1", "0x7f.0.0.1", "2130706433", "017700000001",
-		":443", "127.1..", "localhost..", "::1:443"} {
+		":443", ".", "..", "127.1..", "localhost..", "::1:443",
+		"[169.254.169.254].", "[::1].", "[::1]x:443", "[127.0.0.1]x", "[::1]:", "example.com:44a"} {
 		if v := Check(req("GET", "https", a)); v != want {
 			t.Errorf("%s: got %+v, want %+v", a, v, want)
 		}
 	}
 	if v := Check(req("GET", "https", "93.184.215.14")); !v.OK {
 		t.Errorf("public ip: got %+v", v)
+	}
+}
+
+func TestAllowedAuthorities(t *testing.T) {
+	for _, a := range []string{"[2001:db8::1]:443", "example.com.", "example.com.:443"} {
+		if v := Check(req("GET", "https", a)); !v.OK {
+			t.Errorf("%s: got %+v, want OK", a, v)
+		}
 	}
 }
 

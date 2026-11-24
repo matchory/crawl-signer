@@ -2,7 +2,6 @@
 package rules
 
 import (
-	"net"
 	"net/netip"
 	"strings"
 )
@@ -55,24 +54,8 @@ func Check(r Request) Verdict {
 		return Verdict{false, 403, "scheme"}
 	}
 
-	// Userinfo would make the authority disagree with what the upstream dials.
-	if strings.Contains(r.Authority, "@") {
-		return Verdict{false, 403, "target"}
-	}
-	// An unbracketed IPv6 literal is ambiguous with host:port.
-	if strings.Count(r.Authority, ":") > 1 && !strings.HasPrefix(r.Authority, "[") {
-		return Verdict{false, 403, "target"}
-	}
-	host, port := r.Authority, ""
-	if h, p, err := net.SplitHostPort(r.Authority); err == nil {
-		if p == "" {
-			return Verdict{false, 403, "target"}
-		}
-		host, port = h, p
-	} else {
-		host = strings.TrimSuffix(strings.TrimPrefix(r.Authority, "["), "]")
-	}
-	if host == "" {
+	host, port, ok := parseAuthority(r.Authority)
+	if !ok {
 		return Verdict{false, 403, "target"}
 	}
 	want := "80"
@@ -92,8 +75,54 @@ func Check(r Request) Verdict {
 	return Verdict{OK: true}
 }
 
+// parseAuthority is deliberately strict: anything it cannot classify
+// unambiguously is refused rather than guessed at.
+func parseAuthority(a string) (host, port string, ok bool) {
+	if strings.Contains(a, "@") {
+		return "", "", false
+	}
+	var rest string
+	var hasPort bool
+	if strings.HasPrefix(a, "[") {
+		end := strings.IndexByte(a, ']')
+		if end < 0 {
+			return "", "", false
+		}
+		addr, err := netip.ParseAddr(a[1:end])
+		if err != nil || !addr.Is6() {
+			return "", "", false
+		}
+		host = addr.WithZone("").String()
+		rest = a[end+1:]
+		if rest != "" {
+			if rest[0] != ':' {
+				return "", "", false
+			}
+			port, hasPort = rest[1:], true
+		}
+	} else {
+		if strings.Count(a, ":") > 1 {
+			return "", "", false
+		}
+		host, port, hasPort = strings.Cut(a, ":")
+		host = strings.TrimRight(host, ".")
+		if host == "" {
+			return "", "", false
+		}
+	}
+	if hasPort && port == "" {
+		return "", "", false
+	}
+	for _, c := range port {
+		if c < '0' || c > '9' {
+			return "", "", false
+		}
+	}
+	return host, port, true
+}
+
 func isInternal(host string) bool {
-	host = strings.TrimRight(strings.ToLower(host), ".")
+	host = strings.ToLower(host)
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
@@ -102,12 +131,11 @@ func isInternal(host string) bool {
 			return true
 		}
 	}
-	// Zone IDs and IPv4-mapped forms must not slip past the prefix match.
 	addr, err := netip.ParseAddr(host)
 	if err != nil {
 		return false
 	}
-	addr = addr.WithZone("").Unmap()
+	addr = addr.Unmap()
 	for _, p := range internal {
 		if p.Contains(addr) {
 			return true

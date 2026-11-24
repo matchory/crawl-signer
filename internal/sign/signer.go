@@ -3,6 +3,7 @@ package sign
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"sync"
 	"time"
 
@@ -47,6 +48,9 @@ func NewSigner(b Backend, cfg config.Config, now func() time.Time) *Signer {
 // Headers returns Signature-Agent, Signature-Input and Signature for the
 // canonical authority. If re-signing fails, a still-unexpired entry is served.
 func (s *Signer) Headers(ctx context.Context, authority string) ([]rules.Header, error) {
+	if c := CanonicalAuthority("", authority); c == "" || c[0] == ':' {
+		return nil, errors.New("sign: invalid authority")
+	}
 	now := s.now().Unix()
 
 	s.mu.Lock()

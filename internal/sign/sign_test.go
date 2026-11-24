@@ -51,16 +51,21 @@ func TestBase(t *testing.T) {
 }
 
 type fakeBackend struct {
-	priv  ed25519.PrivateKey
-	calls atomic.Int32
-	gate  chan struct{}
-	err   error
+	priv    ed25519.PrivateKey
+	calls   atomic.Int32
+	gate    chan struct{}
+	entered chan struct{}
+	err     error
 }
 
 func (f *fakeBackend) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 	f.calls.Add(1)
 	if f.gate != nil {
+		f.entered <- struct{}{}
 		<-f.gate
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 	if f.err != nil {
 		return nil, f.err
@@ -223,6 +228,7 @@ func TestTransitTimeout(t *testing.T) {
 func TestConcurrentMissesShareOneCall(t *testing.T) {
 	fb, _ := newFake(t)
 	fb.gate = make(chan struct{})
+	fb.entered = make(chan struct{}, 8)
 	s := NewSigner(fb, cfg, func() time.Time { return time.Unix(1795425007, 0) })
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	errs := make(chan error, 8)
@@ -231,22 +237,71 @@ func TestConcurrentMissesShareOneCall(t *testing.T) {
 		errs <- err
 	}
 	go call(ctx1)
-	for fb.calls.Load() < 1 {
-		time.Sleep(time.Millisecond)
+	select {
+	case <-fb.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend never called")
 	}
 	for i := 0; i < 7; i++ {
 		go call(context.Background())
 	}
-	time.Sleep(50 * time.Millisecond)
 	cancel1()
 	close(fb.gate)
 	for i := 0; i < 8; i++ {
-		if err := <-errs; err != nil {
-			t.Errorf("caller %d: %v", i, err)
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Errorf("caller %d: %v", i, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("callers did not return")
 		}
 	}
 	if n := fb.calls.Load(); n != 1 {
 		t.Errorf("calls = %d, want 1", n)
+	}
+}
+
+func TestInvalidAuthorityNotSigned(t *testing.T) {
+	fb, _ := newFake(t)
+	s := NewSigner(fb, cfg, func() time.Time { return time.Unix(1795425007, 0) })
+	for _, a := range []string{"", ".", ":443"} {
+		if _, err := s.Headers(context.Background(), a); err == nil {
+			t.Errorf("%q: want error", a)
+		}
+	}
+	if fb.calls.Load() != 0 {
+		t.Errorf("backend called %d times", fb.calls.Load())
+	}
+}
+
+func TestTransitEscapesKey(t *testing.T) {
+	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/v1/transit/sign/a%2Fb" {
+			t.Errorf("path %q", r.URL.EscapedPath())
+		}
+		w.Write([]byte(`{"data":{"signature":"vault:v1:AA=="}}`))
+	}))
+	if _, err := NewTransit(sock, "a/b", 1).Sign(context.Background(), []byte("m")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestTransitBodyCap(t *testing.T) {
+	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"signature":"vault:v1:` + strings.Repeat("A", 70<<10) + `"}}`))
+	}))
+	if _, err := NewTransit(sock, "k", 1).Sign(context.Background(), []byte("m")); err == nil {
+		t.Error("oversized response: want error")
+	}
+}
+
+func TestTransitZeroValue(t *testing.T) {
+	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"signature":"vault:v1:AA=="}}`))
+	}))
+	if _, err := (&Transit{Socket: sock, Key: "k", Version: 1}).Sign(context.Background(), []byte("m")); err != nil {
+		t.Error(err)
 	}
 }
 

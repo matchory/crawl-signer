@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,15 +27,23 @@ type Transit struct {
 	Key     string
 	Version int
 
+	once   sync.Once
 	client *http.Client
 }
 
 func NewTransit(socket, key string, version int) *Transit {
-	return &Transit{Socket: socket, Key: key, Version: version, client: &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-		},
-	}}}
+	return &Transit{Socket: socket, Key: key, Version: version}
+}
+
+func (t *Transit) http() *http.Client {
+	t.once.Do(func() {
+		t.client = &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", t.Socket)
+			},
+		}}
+	})
+	return t.client
 }
 
 func (t *Transit) Sign(ctx context.Context, msg []byte) ([]byte, error) {
@@ -54,7 +63,7 @@ func (t *Transit) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := t.client.Do(req)
+	resp, err := t.http().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("transit sign: %w", err)
 	}

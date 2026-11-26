@@ -117,7 +117,11 @@ static_resources:
                 response_body_mode: NONE
                 request_trailer_mode: SKIP
                 response_trailer_mode: SKIP
-              request_attributes: [source.address, xds.listener_metadata]
+              # The internal listener's mark as a bool: Envoy sends
+              # xds.listener_metadata itself only as a text dump.
+              request_attributes:
+              - source.address
+              - 'xds.listener_metadata.filter_metadata["crawl"]["internal"]'
               metadata_options:
                 receiving_namespaces: { untyped: [crawl] }
               # crawl-signer can wait up to 10 s for a robots.txt fetch and

@@ -15,7 +15,6 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
-	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/matchory/crawl-signer/internal/config"
@@ -346,10 +345,16 @@ func (s *Server) mutation(scheme string, sig, headers []rules.Header) *extprocv3
 	return mut
 }
 
+// InternalAttribute is the request attribute Envoy must send for the
+// internal listener's metadata crawl.internal. Envoy sends a message such as
+// xds.listener_metadata only as a text dump, so crawl-signer asks for the
+// bool itself; on a listener without the metadata Envoy leaves it out.
+const InternalAttribute = `xds.listener_metadata.filter_metadata["crawl"]["internal"]`
+
 // source reports whether the request came in on Envoy's internal listener,
-// which carries the listener metadata crawl.internal = true, and the caller
-// address for whois. Anything else, including missing attributes, is a
-// normal caller, so robots.txt can only be skipped by Envoy's own config.
+// and the caller address for whois. Anything but InternalAttribute as the
+// boolean true, including a missing one, is a normal caller, so robots.txt
+// can only be skipped by Envoy's own config.
 func source(attrs map[string]*structpb.Struct) (bool, netip.Addr) {
 	var (
 		internal bool
@@ -358,16 +363,8 @@ func source(attrs map[string]*structpb.Struct) (bool, netip.Addr) {
 
 	for _, st := range attrs {
 		f := st.GetFields()
-		// Envoy sends the listener's Metadata message in protobuf text
-		// format, as a string. What doesn't parse isn't internal.
-		var md corev3.Metadata
-		if lm := f["xds.listener_metadata"].GetStringValue(); lm != "" &&
-			prototext.Unmarshal([]byte(lm), &md) == nil {
-			crawl := md.GetFilterMetadata()[namespace].GetFields()
-			v, ok := crawl["internal"].GetKind().(*structpb.Value_BoolValue)
-			if ok && v.BoolValue {
-				internal = true
-			}
+		if v, ok := f[InternalAttribute].GetKind().(*structpb.Value_BoolValue); ok && v.BoolValue {
+			internal = true
 		}
 		if s := f["source.address"].GetStringValue(); s != "" {
 			if ap, err := netip.ParseAddrPort(s); err == nil {

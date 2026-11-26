@@ -165,14 +165,10 @@ func request(source string, kv ...string) *extprocv3.ProcessingRequest {
 	return r
 }
 
-// envoyInternalMetadata is xds.listener_metadata exactly as Envoy 1.39 and
-// 1.40 send it for examples/envoy.yaml's internal listener: the Metadata
-// message in protobuf text format, as a string.
-const envoyInternalMetadata = `filter_metadata { key: "crawl" value { fields { key: "internal" value { bool_value: true } } } } `
-
-// listenerMetadata sets r's xds.listener_metadata attribute to v.
-func listenerMetadata(
+// withAttribute sets the request attribute name of r to v.
+func withAttribute(
 	r *extprocv3.ProcessingRequest,
+	name string,
 	v *structpb.Value,
 ) *extprocv3.ProcessingRequest {
 	if r.Attributes == nil {
@@ -180,13 +176,14 @@ func listenerMetadata(
 			"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{}},
 		}
 	}
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = v
+	r.Attributes["envoy.filters.http.ext_proc"].Fields[name] = v
 	return r
 }
 
-// internalListener marks r as arriving on Envoy's internal listener.
+// internalListener marks r as arriving on Envoy's internal listener, as
+// Envoy 1.39 and 1.40 send it: the expression, evaluated to a bool.
 func internalListener(r *extprocv3.ProcessingRequest) *extprocv3.ProcessingRequest {
-	return listenerMetadata(r, structpb.NewStringValue(envoyInternalMetadata))
+	return withAttribute(r, InternalAttribute, structpb.NewBoolValue(true))
 }
 
 func (f *fixture) run(t *testing.T, r *extprocv3.ProcessingRequest) *extprocv3.ProcessingResponse {
@@ -555,24 +552,22 @@ func TestOnlyListenerMetadataMakesInternal(t *testing.T) {
 		}
 	}
 
-	// internal must be the boolean true, in the form Envoy sends.
-	structForm, _ := structpb.NewStruct(map[string]any{
-		"filter_metadata": map[string]any{"crawl": map[string]any{"internal": true}},
-	})
-	for name, v := range map[string]*structpb.Value{
-		"string true": structpb.NewStringValue(
-			`filter_metadata { key: "crawl" value { fields { key: "internal" value { string_value: "true" } } } }`,
-		),
-		"other namespace": structpb.NewStringValue(
-			`filter_metadata { key: "other" value { fields { key: "internal" value { bool_value: true } } } }`,
-		),
-		"malformed":   structpb.NewStringValue(`filter_metadata { key: "crawl" value { fields { key: "internal"`),
-		"struct form": structpb.NewStructValue(structForm),
+	// Only InternalAttribute as the boolean true marks a request internal;
+	// the whole listener metadata, as Envoy dumps it to text, doesn't.
+	for _, c := range []struct {
+		name, attr string
+		v          *structpb.Value
+	}{
+		{"string true", InternalAttribute, structpb.NewStringValue("true")},
+		{"false", InternalAttribute, structpb.NewBoolValue(false)},
+		{"metadata dump", "xds.listener_metadata", structpb.NewStringValue(
+			`filter_metadata { key: "crawl" value { fields { key: "internal" value { bool_value: true } } } } `,
+		)},
 	} {
 		f := newFixture()
-		f.run(t, listenerMetadata(request(callerAddr), v))
+		f.run(t, withAttribute(request(callerAddr), c.attr, c.v))
 		if len(f.robots.calls) != 1 {
-			t.Errorf("%s: skipped robots", name)
+			t.Errorf("%s: skipped robots", c.name)
 		}
 	}
 }

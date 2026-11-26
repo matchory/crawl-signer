@@ -141,16 +141,13 @@ func request(source string, kv ...string) *extprocv3.ProcessingRequest {
 	return r
 }
 
-// internalListener marks r as arriving on Envoy's internal listener.
+// internalListener marks r as arriving on Envoy's internal listener, as
+// Envoy 1.40 sends it: the CEL expression evaluates to a bool.
 func internalListener(r *extprocv3.ProcessingRequest) *extprocv3.ProcessingRequest {
-	md, err := structpb.NewStruct(map[string]any{"filter_metadata": map[string]any{"crawl": map[string]any{"internal": true}}})
-	if err != nil {
-		panic(err)
-	}
 	if r.Attributes == nil {
 		r.Attributes = map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{}}}
 	}
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(md)
+	r.Attributes["envoy.filters.http.ext_proc"].Fields[InternalAttribute] = structpb.NewBoolValue(true)
 	return r
 }
 
@@ -377,14 +374,19 @@ func TestInternalListener(t *testing.T) {
 	assertRefusal(t, f.run(t, internalListener(request("", ":authority", "127.0.0.1"))), 403, "target")
 }
 
-func TestCamelCaseListenerMetadata(t *testing.T) {
-	f := newFixture()
-	r := request("")
-	md, _ := structpb.NewStruct(map[string]any{"filterMetadata": map[string]any{"crawl": map[string]any{"internal": true}}})
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(md)
-	mutation(t, f.run(t, r))
-	if len(f.robots.calls) != 0 {
-		t.Error("filterMetadata not recognised as internal")
+// Envoy sends a message-typed attribute such as xds.listener_metadata as its
+// text dump, so the metadata itself never marks a request internal.
+func TestListenerMetadataMessageIsNotInternal(t *testing.T) {
+	text := `filter_metadata { key: "crawl" value { fields { key: "internal" value { bool_value: true } } } } `
+	md, _ := structpb.NewStruct(map[string]any{"filter_metadata": map[string]any{"crawl": map[string]any{"internal": true}}})
+	for _, v := range []*structpb.Value{structpb.NewStringValue(text), structpb.NewStructValue(md)} {
+		f := newFixture()
+		r := request("")
+		r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = v
+		mutation(t, f.run(t, r))
+		if len(f.robots.calls) != 1 {
+			t.Errorf("%v: robots skipped", v)
+		}
 	}
 }
 
@@ -420,8 +422,7 @@ func TestOnlyListenerMetadataMakesInternal(t *testing.T) {
 	// internal must be the boolean true.
 	f := newFixture()
 	r := request(callerAddr)
-	md, _ := structpb.NewStruct(map[string]any{"filter_metadata": map[string]any{"crawl": map[string]any{"internal": "true"}}})
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(md)
+	r.Attributes["envoy.filters.http.ext_proc"].Fields[InternalAttribute] = structpb.NewStringValue("true")
 	f.run(t, r)
 	if len(f.robots.calls) != 1 {
 		t.Error("a string internal skipped robots")

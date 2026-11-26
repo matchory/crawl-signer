@@ -216,20 +216,22 @@ func (s *Server) requestHeaders(ctx context.Context, req *extprocv3.ProcessingRe
 	}
 }
 
-// source reports whether the request came in on Envoy's internal listener,
-// which carries the listener metadata crawl.internal = true, and the caller
-// address for whois. Anything else, including missing attributes, is a
-// normal caller, so robots.txt can only be skipped by Envoy's own config.
+// InternalAttribute is the request attribute Envoy must send for the
+// internal listener's metadata crawl.internal. Envoy passes a message-typed
+// attribute such as xds.listener_metadata only as its text dump, so the
+// signer asks for the bool itself; on a listener without that metadata the
+// expression fails and Envoy leaves the attribute out.
+const InternalAttribute = `xds.listener_metadata.filter_metadata["crawl"]["internal"]`
+
+// source reports whether the request came in on Envoy's internal listener
+// and the caller address for whois. Anything but a true InternalAttribute,
+// including a missing one, is a normal caller, so robots.txt can only be
+// skipped by Envoy's own config.
 func source(attrs map[string]*structpb.Struct) (internal bool, addr netip.Addr) {
 	for _, st := range attrs {
 		f := st.GetFields()
-		lm := f["xds.listener_metadata"].GetStructValue().GetFields()
-		// Envoy's struct conversion may use the proto or the JSON field name.
-		for _, key := range []string{"filter_metadata", "filterMetadata"} {
-			v, ok := lm[key].GetStructValue().GetFields()["crawl"].GetStructValue().GetFields()["internal"].GetKind().(*structpb.Value_BoolValue)
-			if ok && v.BoolValue {
-				internal = true
-			}
+		if v, ok := f[InternalAttribute].GetKind().(*structpb.Value_BoolValue); ok && v.BoolValue {
+			internal = true
 		}
 		if s := f["source.address"].GetStringValue(); s != "" {
 			if ap, err := netip.ParseAddrPort(s); err == nil {

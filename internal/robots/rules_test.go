@@ -9,7 +9,7 @@ func TestParse(t *testing.T) {
 	}{
 		{
 			name:    "specific group beats star",
-			body:    "User-agent: *\nDisallow: /\n\nUser-agent: MatchoryBot\nDisallow: /x\n",
+			body:    "User-agent: *\nDisallow: /\n\nUser-agent: ExampleBot\nDisallow: /x\n",
 			allowed: map[string]bool{"/a": true, "/x": false, "/x/y": false},
 		},
 		{
@@ -19,27 +19,27 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:    "longest match wins",
-			body:    "User-agent: MatchoryBot\nDisallow: /private\nAllow: /private/ok\n",
+			body:    "User-agent: ExampleBot\nDisallow: /private\nAllow: /private/ok\n",
 			allowed: map[string]bool{"/private/ok": true, "/private/ok/deep": true, "/private/x": false, "/public": true},
 		},
 		{
 			name:    "allow wins ties",
-			body:    "User-agent: MatchoryBot\nDisallow: /same\nAllow: /same\n",
+			body:    "User-agent: ExampleBot\nDisallow: /same\nAllow: /same\n",
 			allowed: map[string]bool{"/same": true},
 		},
 		{
 			name:    "wildcard and end anchor",
-			body:    "User-agent: MatchoryBot\nDisallow: /*.pdf$\n",
+			body:    "User-agent: ExampleBot\nDisallow: /*.pdf$\n",
 			allowed: map[string]bool{"/a.pdf": false, "/a.pdf?x": true, "/dir/b.pdf": false, "/a.html": true},
 		},
 		{
 			name:    "agent token is case-insensitive",
-			body:    "User-agent: matchorybot\nDisallow: /\n",
+			body:    "User-agent: examplebot\nDisallow: /\n",
 			allowed: map[string]bool{"/": false, "/a": false},
 		},
 		{
 			name:    "empty disallow allows everything",
-			body:    "User-agent: MatchoryBot\nDisallow:\n",
+			body:    "User-agent: ExampleBot\nDisallow:\n",
 			allowed: map[string]bool{"/": true, "/a": true},
 		},
 		{
@@ -49,7 +49,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:    "leading BOM is ignored",
-			body:    "\xEF\xBB\xBFUser-agent: MatchoryBot\nDisallow: /x\n",
+			body:    "\xEF\xBB\xBFUser-agent: ExampleBot\nDisallow: /x\n",
 			allowed: map[string]bool{"/x": false, "/a": true},
 		},
 		{
@@ -59,7 +59,7 @@ func TestParse(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := Parse([]byte(c.body), Agent)
+			r := Parse([]byte(c.body), agent)
 			for path, want := range c.allowed {
 				if got := r.Allowed(path); got != want {
 					t.Errorf("Allowed(%q) = %v, want %v", path, got, want)
@@ -70,9 +70,11 @@ func TestParse(t *testing.T) {
 }
 
 func TestRulesSize(t *testing.T) {
-	empty := Parse(nil, Agent).Size()
-	one := Parse([]byte("User-agent: *\nDisallow: /abc\n"), Agent).Size()
+	empty := Parse(nil, agent).Size()
+	one := Parse([]byte("User-agent: *\nDisallow: /abc\n"), agent).Size()
 	if empty <= 0 || one <= empty {
 		t.Fatalf("Size: empty %d, one rule %d", empty, one)
 	}
 }
+
+const agent = "ExampleBot"

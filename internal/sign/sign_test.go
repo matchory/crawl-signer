@@ -10,13 +10,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/matchory/crawl-signer/internal/config"
 	"github.com/matchory/crawl-signer/internal/rules"
 )
 
@@ -41,11 +41,45 @@ func TestCanonicalAuthority(t *testing.T) {
 }
 
 const wantBase = `"@authority": example.com
-"signature-agent";key="sig1": "https://crawler.matchory.net"
+"signature-agent";key="sig1": "https://bot.example.com"
 "@signature-params": ("@authority" "signature-agent";key="sig1");created=1795425000;expires=1795425060;keyid="K";alg="ed25519";tag="web-bot-auth"`
 
-func TestBase(t *testing.T) {
-	base, input := Base("example.com", "https://crawler.matchory.net", "K", 1795425000, 1795425060)
+// The base for the structured-string form Cloudflare verifies: no key
+// parameter anywhere.
+const wantStringBase = `"@authority": example.com
+"signature-agent": "https://bot.example.com"
+"@signature-params": ("@authority" "signature-agent");created=1795425000;expires=1795425060;keyid="K";alg="ed25519";tag="web-bot-auth"`
+
+func TestBaseString(t *testing.T) {
+	base, input := Base(
+		"example.com",
+		Agent{URL: "https://bot.example.com"},
+		"K",
+		1795425000,
+		1795425060,
+	)
+	if base != wantStringBase {
+		t.Errorf("base:\n%s\nwant:\n%s", base, wantStringBase)
+	}
+	if strings.Contains(input, "key=") {
+		t.Errorf("input has a key parameter: %q", input)
+	}
+	if h := (Agent{URL: "https://bot.example.com"}).Header(); h != `"https://bot.example.com"` {
+		t.Errorf("header %q", h)
+	}
+	if h := (Agent{URL: "https://bot.example.com", Dictionary: true}).Header(); h != `sig1="https://bot.example.com"` {
+		t.Errorf("dictionary header %q", h)
+	}
+}
+
+func TestBaseDictionary(t *testing.T) {
+	base, input := Base(
+		"example.com",
+		Agent{URL: "https://bot.example.com", Dictionary: true},
+		"K",
+		1795425000,
+		1795425060,
+	)
 	if base != wantBase {
 		t.Errorf("base:\n%s\nwant:\n%s", base, wantBase)
 	}
@@ -86,7 +120,7 @@ func newFake(t *testing.T) (*fakeBackend, ed25519.PublicKey) {
 	return &fakeBackend{priv: priv}, pub
 }
 
-var cfg = config.Config{KeyID: "K", SignatureAgent: "https://crawler.matchory.net"}
+var agent = Agent{URL: "https://bot.example.com"}
 
 func hmap(hs []rules.Header) map[string]string {
 	m := map[string]string{}
@@ -96,19 +130,20 @@ func hmap(hs []rules.Header) map[string]string {
 	return m
 }
 
+// Guards: G5
 func TestSignatureVerifies(t *testing.T) {
 	fb, pub := newFake(t)
 	now := time.Unix(1795425007, 0)
-	s := NewSigner(fb, cfg, func() time.Time { return now })
+	s := NewSigner(fb, agent, "K", func() time.Time { return now })
 	hs, err := s.Headers(context.Background(), "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := hmap(hs)
-	if m["Signature-Agent"] != `sig1="https://crawler.matchory.net"` {
+	if m["Signature-Agent"] != `"https://bot.example.com"` {
 		t.Errorf("Signature-Agent: %q", m["Signature-Agent"])
 	}
-	base, input := Base("example.com", cfg.SignatureAgent, "K", 1795425000, 1795425060)
+	base, input := Base("example.com", agent, "K", 1795425000, 1795425060)
 	if m["Signature-Input"] != input {
 		t.Errorf("Signature-Input: %q, want %q", m["Signature-Input"], input)
 	}
@@ -119,17 +154,19 @@ func TestSignatureVerifies(t *testing.T) {
 	}
 }
 
+// Guards: G5
 func TestWindowCache(t *testing.T) {
 	fb, _ := newFake(t)
 	now := time.Unix(1795425007, 0)
-	s := NewSigner(fb, cfg, func() time.Time { return now })
+	s := NewSigner(fb, agent, "K", func() time.Time { return now })
 	ctx := context.Background()
 	h1, _ := s.Headers(ctx, "example.com")
 	h2, _ := s.Headers(ctx, "example.com")
 	if fb.calls.Load() != 1 {
 		t.Fatalf("calls = %d, want 1", fb.calls.Load())
 	}
-	if !strings.Contains(hmap(h1)["Signature-Input"], "created=1795425000;") || hmap(h1)["Signature"] != hmap(h2)["Signature"] {
+	if !strings.Contains(hmap(h1)["Signature-Input"], "created=1795425000;") ||
+		hmap(h1)["Signature"] != hmap(h2)["Signature"] {
 		t.Errorf("unexpected headers %v", h1)
 	}
 	s.Headers(ctx, "other.example")
@@ -141,15 +178,19 @@ func TestWindowCache(t *testing.T) {
 	if fb.calls.Load() != 3 {
 		t.Errorf("past expires-10: calls = %d, want 3", fb.calls.Load())
 	}
-	if in := hmap(h3)["Signature-Input"]; !strings.Contains(in, "created=1795425030;expires=1795425090;") {
+	if in := hmap(h3)["Signature-Input"]; !strings.Contains(
+		in,
+		"created=1795425030;expires=1795425090;",
+	) {
 		t.Errorf("re-sign window: %q", in)
 	}
 }
 
+// Guards: G1
 func TestTransitDown(t *testing.T) {
 	fb, _ := newFake(t)
 	now := time.Unix(1795425007, 0)
-	s := NewSigner(fb, cfg, func() time.Time { return now })
+	s := NewSigner(fb, agent, "K", func() time.Time { return now })
 	ctx := context.Background()
 	if _, err := s.Headers(ctx, "example.com"); err != nil {
 		t.Fatal(err)
@@ -173,7 +214,14 @@ func TestTransitDown(t *testing.T) {
 }
 
 func unixServer(t *testing.T, h http.Handler) string {
-	sock := filepath.Join(t.TempDir(), "bao.sock")
+	// t.TempDir's path, which holds the test's name, can exceed the 104
+	// bytes macOS allows a socket path.
+	dir, err := os.MkdirTemp("", "sign") //nolint:usetesting // see above
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "bao.sock")
 	l, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
@@ -197,26 +245,38 @@ func TestTransitWire(t *testing.T) {
 			body.Input != base64.StdEncoding.EncodeToString([]byte("msg")) || body.KeyVersion != 3 {
 			t.Errorf("bad request %s %s %s", r.Method, r.URL.Path, b)
 		}
-		w.Write([]byte(`{"data":{"signature":"vault:v3:` + base64.StdEncoding.EncodeToString([]byte("sigbytes")) + `"}}`))
+		w.Write(
+			[]byte(
+				`{"data":{"signature":"vault:v3:` + base64.StdEncoding.EncodeToString(
+					[]byte("sigbytes"),
+				) + `"}}`,
+			),
+		)
 	}))
-	got, err := NewTransit(sock, "web-bot-auth", 3).Sign(context.Background(), []byte("msg"))
+	got, err := mustTransit(
+		t,
+		"unix://"+sock,
+		"web-bot-auth",
+		3,
+	).Sign(context.Background(), []byte("msg"))
 	if err != nil || string(got) != "sigbytes" {
 		t.Errorf("got %q, %v", got, err)
 	}
 }
 
 func TestTransitStatusError(t *testing.T) {
-	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "secret-detail", 503)
+	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "secret-detail", http.StatusServiceUnavailable)
 	}))
-	_, err := NewTransit(sock, "k", 1).Sign(context.Background(), []byte("m"))
-	if err == nil || !strings.Contains(err.Error(), "503") || strings.Contains(err.Error(), "secret-detail") {
+	_, err := mustTransit(t, "unix://"+sock, "k", 1).Sign(context.Background(), []byte("m"))
+	if err == nil || !strings.Contains(err.Error(), "503") ||
+		strings.Contains(err.Error(), "secret-detail") {
 		t.Errorf("err = %v", err)
 	}
 }
 
 func TestTransitTimeout(t *testing.T) {
-	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	sock := unixServer(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
 		select {
 		case <-r.Context().Done():
@@ -224,7 +284,7 @@ func TestTransitTimeout(t *testing.T) {
 		}
 	}))
 	start := time.Now()
-	_, err := NewTransit(sock, "k", 1).Sign(context.Background(), []byte("m"))
+	_, err := mustTransit(t, "unix://"+sock, "k", 1).Sign(context.Background(), []byte("m"))
 	if err == nil || time.Since(start) > 4*time.Second {
 		t.Errorf("err = %v after %v, want timeout near 2s", err, time.Since(start))
 	}
@@ -234,7 +294,7 @@ func TestConcurrentMissesShareOneCall(t *testing.T) {
 	fb, _ := newFake(t)
 	fb.gate = make(chan struct{})
 	fb.entered = make(chan struct{}, 8)
-	s := NewSigner(fb, cfg, func() time.Time { return time.Unix(1795425007, 0) })
+	s := NewSigner(fb, agent, "K", func() time.Time { return time.Unix(1795425007, 0) })
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	errs := make(chan error, 8)
 	call := func(ctx context.Context) {
@@ -247,12 +307,12 @@ func TestConcurrentMissesShareOneCall(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("backend never called")
 	}
-	for i := 0; i < 7; i++ {
+	for range 7 {
 		go call(context.Background())
 	}
 	cancel1()
 	close(fb.gate)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		select {
 		case err := <-errs:
 			if err != nil {
@@ -269,7 +329,7 @@ func TestConcurrentMissesShareOneCall(t *testing.T) {
 
 func TestInvalidAuthorityNotSigned(t *testing.T) {
 	fb, _ := newFake(t)
-	s := NewSigner(fb, cfg, func() time.Time { return time.Unix(1795425007, 0) })
+	s := NewSigner(fb, agent, "K", func() time.Time { return time.Unix(1795425007, 0) })
 	for _, a := range []string{"", ".", ":443"} {
 		if _, err := s.Headers(context.Background(), a); err == nil {
 			t.Errorf("%q: want error", a)
@@ -287,32 +347,33 @@ func TestTransitEscapesKey(t *testing.T) {
 		}
 		w.Write([]byte(`{"data":{"signature":"vault:v1:AA=="}}`))
 	}))
-	if _, err := NewTransit(sock, "a/b", 1).Sign(context.Background(), []byte("m")); err != nil {
+	if _, err := mustTransit(
+		t,
+		"unix://"+sock,
+		"a/b",
+		1,
+	).Sign(context.Background(), []byte("m")); err != nil {
 		t.Error(err)
 	}
 }
 
 func TestTransitBodyCap(t *testing.T) {
-	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(`{"data":{"signature":"vault:v1:` + strings.Repeat("A", 70<<10) + `"}}`))
 	}))
-	if _, err := NewTransit(sock, "k", 1).Sign(context.Background(), []byte("m")); err == nil {
+	if _, err := mustTransit(
+		t,
+		"unix://"+sock,
+		"k",
+		1,
+	).Sign(context.Background(), []byte("m")); err == nil {
 		t.Error("oversized response: want error")
-	}
-}
-
-func TestTransitZeroValue(t *testing.T) {
-	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"data":{"signature":"vault:v1:AA=="}}`))
-	}))
-	if _, err := (&Transit{Socket: sock, Key: "k", Version: 1}).Sign(context.Background(), []byte("m")); err != nil {
-		t.Error(err)
 	}
 }
 
 func TestHeadersAreCopies(t *testing.T) {
 	fb, _ := newFake(t)
-	s := NewSigner(fb, cfg, func() time.Time { return time.Unix(1795425007, 0) })
+	s := NewSigner(fb, agent, "K", func() time.Time { return time.Unix(1795425007, 0) })
 	h1, _ := s.Headers(context.Background(), "example.com")
 	h1[0].Value = "x"
 	h2, _ := s.Headers(context.Background(), "example.com")
@@ -321,6 +382,7 @@ func TestHeadersAreCopies(t *testing.T) {
 	}
 }
 
+// Guards: G5
 func TestSignatureAuthority(t *testing.T) {
 	for _, c := range []struct{ scheme, in, want string }{
 		{"https", "A.Example.:443", "a.example."},
@@ -334,9 +396,54 @@ func TestSignatureAuthority(t *testing.T) {
 		{"https", "[example.com]", ""},
 		{"https", "", ""},
 		{"https", ":443", ""},
+		{"https", "bücher.de", ""},
+		{"https", "a.example\n", ""},
 	} {
 		if got := SignatureAuthority(c.scheme, c.in); got != c.want {
 			t.Errorf("%s %s: got %q, want %q", c.scheme, c.in, got, c.want)
 		}
+	}
+}
+
+func mustTransit(t *testing.T, address, key string, version int) *Transit {
+	t.Helper()
+	tr, err := NewTransit(address, "transit", key, version, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tr
+}
+
+func TestTransitHTTPMountAndToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/secret-transit/sign/k" || r.Header.Get("X-Vault-Token") != "s.token" {
+			t.Errorf("path %q, token %q", r.URL.Path, r.Header.Get("X-Vault-Token"))
+		}
+		w.Write([]byte(`{"data":{"signature":"vault:v1:AA=="}}`))
+	}))
+	t.Cleanup(srv.Close)
+	tr, err := NewTransit(srv.URL+"/", "/secret-transit/", "k", 1, "s.token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Sign(context.Background(), []byte("m")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestTransitSendsNoTokenWhenEmpty(t *testing.T) {
+	sock := unixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := r.Header["X-Vault-Token"]; ok {
+			t.Error("X-Vault-Token sent without a token")
+		}
+		w.Write([]byte(`{"data":{"signature":"vault:v1:AA=="}}`))
+	}))
+	if _, err := mustTransit(
+		t,
+		"unix://"+sock,
+		"k",
+		1,
+	).Sign(context.Background(), []byte("m")); err != nil {
+		t.Error(err)
 	}
 }

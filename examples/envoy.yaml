@@ -1,0 +1,232 @@
+# Envoy as a crawl gateway with crawl-signer: the smallest configuration
+# that works. docs/guides/deploy-with-envoy.md explains each part, and what
+# to add before callers on other hosts may use it.
+#
+# Callers send absolute-form http:// requests to 127.0.0.1:3128, as to any
+# HTTP proxy. Envoy asks crawl-signer about each request, then fetches it
+# over https (or http with X-Crawl-Scheme: http) and returns the answer.
+#
+# The end-to-end test runs this file unchanged.
+
+# Every caller connection costs memory: past this many, Envoy refuses new
+# ones instead of running out.
+overload_manager:
+  resource_monitors:
+  - name: envoy.resource_monitors.global_downstream_max_connections
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig
+      max_active_downstream_connections: 16384
+
+admin:
+  address:
+    # A socket, not a TCP port: the admin interface can change Envoy's state.
+    # mode 384 is 0600.
+    pipe: { path: /run/envoy/admin.sock, mode: 384 }
+
+static_resources:
+  listeners:
+  - name: callers
+    address:
+      # Loopback only. To accept callers from other hosts, restrict who can
+      # connect first (see the guide): this is an open proxy otherwise.
+      socket_address: { address: 127.0.0.1, port_value: 3128 }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: callers
+          codec_type: HTTP1
+          http_protocol_options:
+            allow_absolute_url: true
+          use_remote_address: true
+          skip_xff_append: true
+          generate_request_id: false
+          server_header_transformation: PASS_THROUGH
+          # Only crawl-signer chooses the upstream scheme. The header goes
+          # before the route is chosen and before any filter runs.
+          early_header_mutation_extensions:
+          - name: envoy.http.early_header_mutation.header_mutation
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.http.early_header_mutation.header_mutation.v3.HeaderMutation
+              mutations:
+              - remove: x-crawl-upstream
+          access_log:
+          - name: envoy.access_loggers.stdout
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+              log_format:
+                json_format:
+                  time: "%START_TIME%"
+                  caller_address: "%DOWNSTREAM_REMOTE_ADDRESS%"
+                  caller: "%DYNAMIC_METADATA(crawl:caller)%"
+                  method: "%REQ(:METHOD)%"
+                  authority: "%REQ(:AUTHORITY)%"
+                  path: "%REQ(:PATH)%"
+                  response_code: "%RESPONSE_CODE%"
+                  response_flags: "%RESPONSE_FLAGS%"
+                  upstream_host: "%UPSTREAM_HOST%"
+                  verdict: "%DYNAMIC_METADATA(crawl:verdict)%"
+                  robots: "%DYNAMIC_METADATA(crawl:robots)%"
+                  keyid: "%DYNAMIC_METADATA(crawl:keyid)%"
+          route_config: &routes
+            name: crawl
+            virtual_hosts:
+            - name: any
+              domains: ["*"]
+              routes:
+              # crawl-signer sets x-crawl-upstream: http for a plain-http
+              # target and clears the route cache, so the route is chosen
+              # again after it answers.
+              - match:
+                  prefix: /
+                  headers:
+                  - name: x-crawl-upstream
+                    string_match: { exact: http }
+                route: { cluster: dfp_http, timeout: 300s }
+                request_headers_to_remove: &strip
+                # crawl-signer's routing header, and what Envoy adds itself.
+                # x-forwarded-proto must reach the route match: without it,
+                # Envoy matches no route once the cache is cleared.
+                - x-crawl-upstream
+                - x-forwarded-for
+                - x-forwarded-proto
+                - x-envoy-external-address
+                - x-envoy-internal
+                - x-envoy-expected-rq-timeout-ms
+                - x-envoy-decorator-operation
+                - x-envoy-attempt-count
+                - x-envoy-original-path
+                - x-request-id
+              - match: { prefix: / }
+                route: { cluster: dfp_https, timeout: 300s }
+                request_headers_to_remove: *strip
+          http_filters: &filters
+          - name: envoy.filters.http.ext_proc
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+              grpc_service:
+                envoy_grpc: { cluster_name: crawl_signer }
+              # When crawl-signer can't answer, Envoy refuses the request
+              # instead of sending it unchecked and unsigned.
+              failure_mode_allow: false
+              processing_mode:
+                request_header_mode: SEND
+                response_header_mode: SKIP
+                request_body_mode: NONE
+                response_body_mode: NONE
+                request_trailer_mode: SKIP
+                response_trailer_mode: SKIP
+              request_attributes: [source.address, xds.listener_metadata]
+              metadata_options:
+                receiving_namespaces: { untyped: [crawl] }
+              # crawl-signer can wait up to 10 s for a robots.txt fetch and
+              # 2 s for a signature before it answers.
+              message_timeout: 15s
+              max_message_timeout: 15s
+              mutation_rules:
+                allow_envoy: true
+                disallow_is_error: true
+          - name: envoy.filters.http.dynamic_forward_proxy
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
+              dns_cache_config: &dns
+                name: dfp
+                dns_lookup_family: V4_PREFERRED
+                max_hosts: 50000
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+              suppress_envoy_headers: true
+
+  # crawl-signer fetches robots.txt through this listener, so the fetch
+  # leaves the way a crawl does. Its metadata tells crawl-signer not to check
+  # robots.txt for these requests, which would wait on the fetch in flight.
+  # Only crawl-signer may connect: mode 432 is 0660, for the group both share.
+  - name: internal
+    address:
+      pipe: { path: /run/envoy/internal.sock, mode: 432 }
+    metadata:
+      filter_metadata:
+        crawl: { internal: true }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: internal
+          codec_type: HTTP1
+          http_protocol_options:
+            allow_absolute_url: true
+          skip_xff_append: true
+          generate_request_id: false
+          server_header_transformation: PASS_THROUGH
+          early_header_mutation_extensions:
+          - name: envoy.http.early_header_mutation.header_mutation
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.http.early_header_mutation.header_mutation.v3.HeaderMutation
+              mutations:
+              - remove: x-crawl-upstream
+          route_config: *routes
+          http_filters: *filters
+
+  clusters:
+  - name: crawl_signer
+    type: STATIC
+    connect_timeout: 1s
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options: {}
+    load_assignment:
+      cluster_name: crawl_signer
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              pipe: { path: /run/crawl-signer/grpc.sock }
+
+  # A dynamic forward proxy cluster's default port is 443 with TLS and 80
+  # without. To send from particular addresses, add upstream_bind_config.
+  - name: dfp_https
+    connect_timeout: 5s
+    lb_policy: CLUSTER_PROVIDED
+    cluster_type:
+      name: envoy.clusters.dynamic_forward_proxy
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+        dns_cache_config: *dns
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        upstream_http_protocol_options:
+          auto_sni: true
+          auto_san_validation: true
+        explicit_http_config:
+          http_protocol_options: {}
+    transport_socket:
+      name: envoy.transport_sockets.tls
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+        common_tls_context:
+          validation_context:
+            trusted_ca: { filename: /etc/ssl/certs/ca-certificates.crt }
+  - name: dfp_http
+    connect_timeout: 5s
+    lb_policy: CLUSTER_PROVIDED
+    cluster_type:
+      name: envoy.clusters.dynamic_forward_proxy
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+        dns_cache_config: *dns
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        # Required on every dynamic forward proxy cluster; without TLS they
+        # do nothing.
+        upstream_http_protocol_options:
+          auto_sni: true
+          auto_san_validation: true
+        explicit_http_config:
+          http_protocol_options: {}

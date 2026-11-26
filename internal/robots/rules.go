@@ -1,4 +1,4 @@
-// Package robots decides whether robots.txt (RFC 9309) lets MatchoryBot fetch
+// Package robots decides whether robots.txt (RFC 9309) lets the crawler fetch
 // a path, fetching and caching each origin's file.
 package robots
 
@@ -8,9 +8,6 @@ import (
 
 	"github.com/jimsmart/grobotstxt"
 )
-
-// Agent is the product token MatchoryBot looks for in User-agent lines.
-const Agent = "MatchoryBot"
 
 // grobotstxt's matcher only answers one URL per parse, so its parser callbacks
 // collect the selected group's rules and grobotstxt.Matches matches them.
@@ -109,6 +106,20 @@ func (c *collector) HandleUserAgent(_ int, ua string) {
 func (c *collector) HandleAllow(_ int, v string)    { c.add(v, true) }
 func (c *collector) HandleDisallow(_ int, v string) { c.add(v, false) }
 
+func (c *collector) HandleSitemap(int, string)               {}
+func (c *collector) HandleUnknownAction(int, string, string) {}
+
+// token cuts a User-agent value at the first character outside an RFC 9110
+// token, so "ExampleBot/1.0" names ExampleBot.
+func token(ua string) string {
+	for i := range len(ua) {
+		if c := ua[i]; !tokenChar(c) {
+			return ua[:i]
+		}
+	}
+	return ua
+}
+
 func (c *collector) add(pattern string, allow bool) {
 	if !c.inGlobal && !c.inSpecific {
 		return
@@ -126,19 +137,9 @@ func (c *collector) add(pattern string, allow bool) {
 	}
 }
 
-func (c *collector) HandleSitemap(int, string)               {}
-func (c *collector) HandleUnknownAction(int, string, string) {}
-
-// token cuts a User-agent value at the first character outside an RFC 9110
-// token, so "MatchoryBot/1.0" names MatchoryBot.
-func token(ua string) string {
-	for i := 0; i < len(ua); i++ {
-		c := ua[i]
-		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0) {
-			return ua[:i]
-		}
-	}
-	return ua
+func tokenChar(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' ||
+		strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
 }
 
 func isSpace(b byte) bool { return b == ' ' || b == '\t' }

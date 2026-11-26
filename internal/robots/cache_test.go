@@ -96,7 +96,7 @@ func TestNotFoundAllows(t *testing.T) {
 	f := newFake(func(Origin) (Result, error) {
 		return Result{Status: 404, Body: []byte("User-agent: *\nDisallow: /")}, nil
 	})
-	c := NewCache(f, 1<<20, clk.now)
+	c := NewCache(f, agent, 1<<20, clk.now)
 	if got := c.Check(context.Background(), example, "/a"); got != Allowed {
 		t.Fatalf("Check after 404 = %v, want Allowed", got)
 	}
@@ -112,10 +112,11 @@ func TestNotFoundAllows(t *testing.T) {
 	}
 }
 
+// Guards: G3
 func TestStaleOnError(t *testing.T) {
 	clk := newClock()
-	f := newFake(body("User-agent: MatchoryBot\nDisallow: /x\n"))
-	c := NewCache(f, 1<<20, clk.now)
+	f := newFake(body("User-agent: ExampleBot\nDisallow: /x\n"))
+	c := NewCache(f, agent, 1<<20, clk.now)
 	ctx := context.Background()
 	if got := c.Check(ctx, example, "/x"); got != Disallowed {
 		t.Fatalf("fresh: Check(/x) = %v, want Disallowed", got)
@@ -142,7 +143,7 @@ func TestNotFoundIsNoStaleFallback(t *testing.T) {
 		t.Run(first, func(t *testing.T) {
 			clk := newClock()
 			f := newFake(body("User-agent: *\nDisallow: /x\n"))
-			c := NewCache(f, 1<<20, clk.now)
+			c := NewCache(f, agent, 1<<20, clk.now)
 			ctx := context.Background()
 			if first == "200 then 404" {
 				c.Check(ctx, example, "/a")
@@ -168,7 +169,7 @@ func TestExpiredNotFoundOnWaitTimeout(t *testing.T) {
 
 	clk := newClock()
 	f := newFake(func(Origin) (Result, error) { return Result{Status: 404}, nil })
-	c := NewCache(f, 1<<20, clk.now)
+	c := NewCache(f, agent, 1<<20, clk.now)
 	ctx := context.Background()
 	if got := c.Check(ctx, example, "/a"); got != Allowed {
 		t.Fatalf("after 404: %v, want Allowed", got)
@@ -185,10 +186,11 @@ func TestExpiredNotFoundOnWaitTimeout(t *testing.T) {
 	}
 }
 
+// Guards: G3
 func TestFailureBackoff(t *testing.T) {
 	clk := newClock()
 	f := newFake(func(Origin) (Result, error) { return Result{Status: 500}, nil })
-	c := NewCache(f, 1<<20, clk.now)
+	c := NewCache(f, agent, 1<<20, clk.now)
 	ctx := context.Background()
 	if got := c.Check(ctx, example, "/"); got != Unavailable {
 		t.Fatalf("cold 500: %v, want Unavailable", got)
@@ -227,7 +229,7 @@ func TestSingleflight(t *testing.T) {
 		<-release
 		return Result{Status: 200}, nil
 	})
-	c := NewCache(f, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, newClock().now)
 	var wg, started sync.WaitGroup
 	var allowed atomic.Int32
 	for range 50 {
@@ -250,6 +252,7 @@ func TestSingleflight(t *testing.T) {
 	}
 }
 
+// Guards: G3
 func TestWaitTimeout(t *testing.T) {
 	old := waitTimeout
 	waitTimeout = 100 * time.Millisecond // stands in for 10 s; the fetcher stands in for 11 s
@@ -261,7 +264,7 @@ func TestWaitTimeout(t *testing.T) {
 		<-release
 		return Result{Status: 200}, nil
 	})
-	c := NewCache(f, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, newClock().now)
 	start := time.Now()
 	got := c.Check(context.Background(), example, "/a")
 	elapsed := time.Since(start)
@@ -280,7 +283,7 @@ func TestCallerContextCancels(t *testing.T) {
 		<-release
 		return Result{Status: 200}, nil
 	})
-	c := NewCache(f, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, newClock().now)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if got := c.Check(ctx, example, "/a"); got != Unavailable {
@@ -291,8 +294,8 @@ func TestCallerContextCancels(t *testing.T) {
 func TestEviction(t *testing.T) {
 	const robots = "User-agent: *\nDisallow: /x\n"
 	f := newFake(body(robots))
-	size := Parse([]byte(robots), Agent).Size()
-	c := NewCache(f, int64(3*size), newClock().now)
+	size := Parse([]byte(robots), agent).Size()
+	c := NewCache(f, agent, int64(3*size), newClock().now)
 	ctx := context.Background()
 	o := func(h string) Origin { return Origin{Scheme: "https", Authority: h} }
 
@@ -313,7 +316,7 @@ func TestEviction(t *testing.T) {
 
 func TestRobotsPathExempt(t *testing.T) {
 	f := newFake(func(Origin) (Result, error) { return Result{}, errors.New("must not fetch") })
-	c := NewCache(f, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, newClock().now)
 	if got := c.Check(context.Background(), example, "/robots.txt"); got != Allowed {
 		t.Fatalf("Check(/robots.txt) = %v, want Allowed", got)
 	}
@@ -324,7 +327,7 @@ func TestRobotsPathExempt(t *testing.T) {
 
 func TestCheckCanonicalisesOrigin(t *testing.T) {
 	f := newFake(body("User-agent: *\nDisallow: /x\n"))
-	c := NewCache(f, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, newClock().now)
 	ctx := context.Background()
 	c.Check(ctx, Origin{Scheme: "HTTPS", Authority: "Example.COM:443"}, "/")
 	c.Check(ctx, example, "/")
@@ -334,7 +337,11 @@ func TestCheckCanonicalisesOrigin(t *testing.T) {
 	if got := c.Check(ctx, Origin{Scheme: "https", Authority: "a b.com"}, "/"); got != Unavailable {
 		t.Fatalf("invalid authority: %v, want Unavailable", got)
 	}
-	if got := c.Check(ctx, Origin{Scheme: "ftp", Authority: "example.com"}, "/"); got != Unavailable {
+	if got := c.Check(
+		ctx,
+		Origin{Scheme: "ftp", Authority: "example.com"},
+		"/",
+	); got != Unavailable {
 		t.Fatalf("ftp scheme: %v, want Unavailable", got)
 	}
 }
@@ -342,7 +349,7 @@ func TestCheckCanonicalisesOrigin(t *testing.T) {
 func TestLookupHookAndStats(t *testing.T) {
 	const robots = "User-agent: *\nDisallow: /x\n"
 	clk := newClock()
-	c := NewCache(newFake(body(robots)), 1<<20, clk.now)
+	c := NewCache(newFake(body(robots)), agent, 1<<20, clk.now)
 	var hits, misses int
 	c.OnLookup = func(hit bool) {
 		if hit {
@@ -361,7 +368,7 @@ func TestLookupHookAndStats(t *testing.T) {
 		t.Errorf("hits %d misses %d, want 1 and 2", hits, misses)
 	}
 	entries, bytes := c.Stats()
-	if entries != 1 || bytes != int64(Parse([]byte(robots), Agent).Size()) {
+	if entries != 1 || bytes != int64(Parse([]byte(robots), agent).Size()) {
 		t.Errorf("stats: %d entries, %d bytes", entries, bytes)
 	}
 }

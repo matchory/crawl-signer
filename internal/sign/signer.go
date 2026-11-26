@@ -9,7 +9,6 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/matchory/crawl-signer/internal/config"
 	"github.com/matchory/crawl-signer/internal/rules"
 )
 
@@ -31,9 +30,10 @@ type entry struct {
 
 // Signer caches one signature per authority; a signature is valid for 60 s.
 type Signer struct {
-	b   Backend
-	cfg config.Config
-	now func() time.Time
+	b     Backend
+	agent Agent
+	keyid string
+	now   func() time.Time
 
 	mu        sync.Mutex
 	cache     map[string]entry
@@ -41,8 +41,10 @@ type Signer struct {
 	group     singleflight.Group
 }
 
-func NewSigner(b Backend, cfg config.Config, now func() time.Time) *Signer {
-	return &Signer{b: b, cfg: cfg, now: now, cache: map[string]entry{}}
+// NewSigner returns a Signer that signs with b as the Signature-Agent agent,
+// naming the key keyid.
+func NewSigner(b Backend, agent Agent, keyid string, now func() time.Time) *Signer {
+	return &Signer{b: b, agent: agent, keyid: keyid, now: now, cache: map[string]entry{}}
 }
 
 // Headers returns Signature-Agent, Signature-Input and Signature for the
@@ -74,13 +76,13 @@ func (s *Signer) Headers(ctx context.Context, authority string) ([]rules.Header,
 	v, err, _ := s.group.Do(authority, func() (any, error) {
 		created := now - now%step
 		expires := created + validity
-		base, input := Base(authority, s.cfg.SignatureAgent, s.cfg.KeyID, created, expires)
+		base, input := Base(authority, s.agent, s.keyid, created, expires)
 		sig, err := s.b.Sign(context.WithoutCancel(ctx), []byte(base))
 		if err != nil {
 			return nil, err
 		}
 		ne := entry{expires: expires, headers: []rules.Header{
-			{Name: "Signature-Agent", Value: `sig1="` + s.cfg.SignatureAgent + `"`},
+			{Name: "Signature-Agent", Value: s.agent.Header()},
 			{Name: "Signature-Input", Value: input},
 			{Name: "Signature", Value: "sig1=:" + base64.StdEncoding.EncodeToString(sig) + ":"},
 		}}
@@ -95,7 +97,9 @@ func (s *Signer) Headers(ctx context.Context, authority string) ([]rules.Header,
 		}
 		return nil, err
 	}
-	return clone(v.(entry).headers), nil
+	ne, _ := v.(entry)
+
+	return clone(ne.headers), nil
 }
 
 func clone(h []rules.Header) []rules.Header { return append([]rules.Header(nil), h...) }

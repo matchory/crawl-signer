@@ -1,0 +1,60 @@
+# The end-to-end test's components. run.sh starts them; see docs/testing.md.
+# WORK is a directory run.sh fills with the binaries, keys and configuration.
+name: crawl-signer-e2e
+
+services:
+  openbao:
+    image: ${OPENBAO_IMAGE}
+    command: >-
+      server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+      BAO_TOKEN: root
+      SKIP_SETCAP: "true"
+
+  # One website under several names, each with its own robots.txt.
+  origin:
+    image: ${ALPINE_IMAGE}
+    command: >-
+      /e2e/origin -public-key /e2e/public-key
+      -cert /e2e/origin.crt -key /e2e/origin.key
+    volumes:
+      - ${WORK}:/e2e:ro
+    networks:
+      default:
+        aliases: [origin.test, norobots.test, broken.test, moved.test]
+
+  signer:
+    image: ${ALPINE_IMAGE}
+    command: /e2e/crawl-signer -config /e2e/signer.json
+    environment:
+      BAO_TOKEN: root
+    volumes:
+      - ${WORK}:/e2e:ro
+      - envoy-run:/run/envoy
+      - signer-run:/run/crawl-signer
+
+  envoy:
+    image: ${ENVOY_IMAGE}
+    command: -c /etc/envoy/envoy.yaml --log-level warn
+    environment:
+      # The sockets are shared with crawl-signer, which runs as root here.
+      ENVOY_UID: "0"
+    volumes:
+      - ../../examples/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      # The test CA, which signed the origin's certificate, in place of the
+      # system's.
+      - ${WORK}/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro
+      - envoy-run:/run/envoy
+      - signer-run:/run/crawl-signer
+
+  # Shares Envoy's network namespace, so it reaches the loopback listener
+  # the example config binds, as a caller on the gateway host would.
+  client:
+    image: ${CURL_IMAGE}
+    entrypoint: ["sleep", "infinity"]
+    network_mode: service:envoy
+
+volumes:
+  envoy-run:
+  signer-run:

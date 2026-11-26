@@ -31,7 +31,9 @@ func TestBody(t *testing.T) {
 	if v := Check(req("GET", "https", "example.com", Header{"content-length", "0"})); !v.OK {
 		t.Errorf("content-length 0: got %+v, want OK", v)
 	}
-	if v := Check(req("GET", "https", "example.com", Header{"transfer-encoding", "chunked"})); v != want {
+	if v := Check(
+		req("GET", "https", "example.com", Header{"transfer-encoding", "chunked"}),
+	); v != want {
 		t.Errorf("transfer-encoding: got %+v", v)
 	}
 }
@@ -51,7 +53,8 @@ func TestPort(t *testing.T) {
 
 func TestTarget(t *testing.T) {
 	want := Verdict{false, 403, "target"}
-	for _, a := range []string{"10.0.0.1", "[fd7a::1]", "169.254.169.254", "localhost", "foo.localhost:443", "[::1]:443",
+	for _, a := range []string{
+		"10.0.0.1", "[fd7a::1]", "169.254.169.254", "localhost", "foo.localhost:443", "[::1]:443",
 		"evil@127.0.0.1", "example.com:", "127.1", "0x7f.0.0.1", "2130706433", "017700000001",
 		":443", ".", "..", "127.1..", "localhost..", "::1:443",
 		"[169.254.169.254].", "[::1].", "[::1]x:443", "[127.0.0.1]x", "[::1]:", "example.com:44a",
@@ -61,7 +64,10 @@ func TestTarget(t *testing.T) {
 		"[::ffff:127.0.0.1]", "[::ffff:a9fe:a9fe]", "[fe80::1%25eth0]", "LOCALHOST", "foo.localhost.", "0.0.0.0",
 		"[0:0:0:0:0:0:0:1]",
 		"[::ffff:0:7f00:1]", "[2001:0:4136:e378:8000:63bf:3fff:fdd2]", "[fec0::1]", "[100::1]",
-		"240.0.0.1", "255.255.255.255", "192.0.0.1", "198.18.0.1"} {
+		"240.0.0.1", "255.255.255.255", "192.0.0.1", "198.18.0.1",
+		// A zone has no meaning in an authority, even on a public address.
+		"[2a00:1450::1%eth0]", "[fe10::8% 00000]",
+	} {
 		if v := Check(req("GET", "https", a)); v != want {
 			t.Errorf("%s: got %+v, want %+v", a, v, want)
 		}
@@ -72,8 +78,10 @@ func TestTarget(t *testing.T) {
 }
 
 func TestAllowedAuthorities(t *testing.T) {
-	for _, a := range []string{"[2001:db8::1]:443", "example.com.", "example.com.:443",
-		"xn--bcher-kva.de", "under_score.example.com"} {
+	for _, a := range []string{
+		"[2001:db8::1]:443", "example.com.", "example.com.:443",
+		"xn--bcher-kva.de", "under_score.example.com",
+	} {
 		if v := Check(req("GET", "https", a)); !v.OK {
 			t.Errorf("%s: got %+v, want OK", a, v)
 		}
@@ -96,16 +104,41 @@ func TestNonHTTPSchemeIs403Scheme(t *testing.T) {
 }
 
 func TestAllowlist(t *testing.T) {
-	in := []Header{{"Cookie", "a"}, {"Authorization", "b"}, {"User-Agent", "c"}, {"accept", "d"},
-		{"Range", "e"}, {"X-Forwarded-For", "f"}, {"Signature", "g"},
-		{"ACCEPT-LANGUAGE", "h"}, {"Accept-Encoding", "i"}, {"If-None-Match", "j"}, {"if-modified-since", "k"}}
+	in := []Header{
+		{"Cookie", "a"},
+		{"Authorization", "b"},
+		{"User-Agent", "c"},
+		{"accept", "d"},
+		{"Range", "e"},
+		{"X-Forwarded-For", "f"},
+		{"Signature", "g"},
+		{"ACCEPT-LANGUAGE", "h"},
+		{"Accept-Encoding", "i"},
+		{"If-None-Match", "j"},
+		{"if-modified-since", "k"},
+	}
 	keep, drop := Allowlist(in)
-	wantKeep := []Header{{"accept", "d"}, {"Range", "e"}, {"ACCEPT-LANGUAGE", "h"}, {"Accept-Encoding", "i"},
-		{"If-None-Match", "j"}, {"if-modified-since", "k"}}
+	wantKeep := []Header{
+		{"accept", "d"},
+		{"Range", "e"},
+		{"ACCEPT-LANGUAGE", "h"},
+		{"Accept-Encoding", "i"},
+		{"If-None-Match", "j"},
+		{"if-modified-since", "k"},
+	}
 	if !reflect.DeepEqual(keep, wantKeep) {
 		t.Errorf("keep = %v, want %v", keep, wantKeep)
 	}
-	if want := []string{"Cookie", "Authorization", "User-Agent", "X-Forwarded-For", "Signature"}; !reflect.DeepEqual(drop, want) {
+	if want := []string{
+		"Cookie",
+		"Authorization",
+		"User-Agent",
+		"X-Forwarded-For",
+		"Signature",
+	}; !reflect.DeepEqual(
+		drop,
+		want,
+	) {
 		t.Errorf("drop = %v, want %v", drop, want)
 	}
 }

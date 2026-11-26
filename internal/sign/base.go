@@ -1,4 +1,5 @@
-// Package sign produces Web Bot Auth signature headers using an OpenBao Transit key.
+// Package sign produces Web Bot Auth (RFC 9421) signature headers with an
+// Ed25519 key, held in memory or in OpenBao or Vault Transit.
 package sign
 
 import (
@@ -44,11 +45,21 @@ func CanonicalAuthority(scheme, authority string) string {
 // SignatureAuthority is the RFC 9421 @authority for the :authority Envoy
 // forwards upstream: lowercased and without the scheme's default port, but
 // with a trailing dot kept, since Envoy sends it as received. It returns ""
-// for an authority Headers would refuse.
+// for an authority Headers would refuse, or one with a byte outside visible
+// ASCII.
 func SignatureAuthority(scheme, authority string) string {
+	// The signature base is text: a byte outside visible ASCII would end a
+	// line or fail to match what Envoy sends.
+	for i := range len(authority) {
+		if authority[i] <= ' ' || authority[i] >= 0x7f {
+			return ""
+		}
+	}
+
 	a := strings.ToLower(authority)
 	if i := strings.LastIndex(a, ":"); i >= 0 && !strings.HasSuffix(a, "]") {
-		if port := a[i+1:]; (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		if port := a[i+1:]; (scheme == "https" && port == "443") ||
+			(scheme == "http" && port == "80") {
 			a = a[:i]
 		}
 	}
@@ -58,11 +69,51 @@ func SignatureAuthority(scheme, authority string) string {
 	return a
 }
 
+// Agent is the Signature-Agent: the URL of the key directory, and the form
+// the header takes.
+type Agent struct {
+	URL string
+	// Dictionary sends the dictionary form of later Web Bot Auth drafts,
+	// sig1="<URL>", covered as "signature-agent";key="sig1". Without it,
+	// the header is the structured string "<URL>" of
+	// draft-meunier-http-message-signatures-directory-03, which is what
+	// Cloudflare verifies.
+	Dictionary bool
+}
+
+// Header returns the Signature-Agent header value.
+func (a Agent) Header() string {
+	if a.Dictionary {
+		return `sig1="` + a.URL + `"`
+	}
+
+	return `"` + a.URL + `"`
+}
+
+func (a Agent) component() string {
+	if a.Dictionary {
+		return `"signature-agent";key="sig1"`
+	}
+
+	return `"signature-agent"`
+}
+
 // Base returns the RFC 9421 signature base and the Signature-Input value.
-func Base(authority, agent, keyid string, created, expires int64) (base, input string) {
-	params := fmt.Sprintf(`("@authority" "signature-agent";key="sig1");created=%d;expires=%d;keyid=%q;alg="ed25519";tag="web-bot-auth"`,
-		created, expires, keyid)
-	base = fmt.Sprintf("\"@authority\": %s\n\"signature-agent\";key=\"sig1\": %q\n\"@signature-params\": %s",
-		authority, agent, params)
+func Base(authority string, agent Agent, keyid string, created, expires int64) (string, string) {
+	params := fmt.Sprintf(
+		`("@authority" %s);created=%d;expires=%d;keyid=%q;alg="ed25519";tag="web-bot-auth"`,
+		agent.component(),
+		created,
+		expires,
+		keyid,
+	)
+	base := fmt.Sprintf(
+		"\"@authority\": %s\n%s: %q\n\"@signature-params\": %s",
+		authority,
+		agent.component(),
+		agent.URL,
+		params,
+	)
+
 	return base, "sig1=" + params
 }

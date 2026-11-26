@@ -49,6 +49,7 @@ type Resolver struct {
 	cache map[netip.Addr]entry
 }
 
+// New returns a Resolver that asks src.
 func New(src Source, now func() time.Time) *Resolver {
 	return &Resolver{src: src, now: now, cache: map[netip.Addr]entry{}}
 }
@@ -79,7 +80,9 @@ func (r *Resolver) Lookup(ctx context.Context, a netip.Addr) (Caller, error) {
 	})
 	select {
 	case res := <-ch:
-		return res.Val.(Caller), res.Err
+		c, _ := res.Val.(Caller)
+
+		return c, res.Err
 	case <-ctx.Done():
 		return Caller{}, ctx.Err()
 	}

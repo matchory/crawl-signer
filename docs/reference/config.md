@@ -20,6 +20,7 @@ and prints which. A change takes effect at the next start. Secrets are read once
   "signature_agent_form": "string",
   "robots_agent": "ExampleBot",
   "robots_cache_bytes": 67108864,
+  "max_crawl_delay_seconds": 60,
   "tailscale_whois": false,
   "signing_key": { "private_key": { "filename": "/run/credentials/crawl-signer.service/key.pem" } }
 }
@@ -114,6 +115,16 @@ from their logs which group applies.
 How much memory the parsed robots.txt rules may take. Past it, the least recently used origins are dropped and
 fetched again when next needed. The size is an estimate: each origin counts 64 bytes, plus 32 bytes and the
 pattern's length for each rule. 64 MiB holds tens of thousands of typical origins.
+
+## `max_crawl_delay_seconds`
+
+| Type | Default |
+| --- | --- |
+| integer, seconds | `60` |
+
+The longest `Crawl-delay` crawl-signer applies. A robots.txt asking for more gets this; `0` means the default. A site
+with `Crawl-delay: 86400` would otherwise allow one request a day.
+[robots.txt](../explanation/robots-txt.md#crawl-delay) explains the pacing.
 
 ## `tailscale_whois`
 

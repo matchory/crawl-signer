@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crawl-signer, OpenBao and an origin that verifies every signature.
 - Fuzz tests, the security model in `SECURITY.md` with a test per
   guarantee, and documentation.
+- `Crawl-delay` is applied per origin: a request that comes sooner than the
+  delay after the last one let through is refused with `429 crawl-delay`
+  and `Retry-After`. The delay is capped by the new
+  `max_crawl_delay_seconds`, 60 by default. Each instance paces on its own.
 
 ### Fixed
 

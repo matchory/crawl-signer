@@ -49,7 +49,7 @@ them: `request_headers_to_remove` in the example.
 ### A request it refuses
 
 An immediate response with an empty body, the status below, the header `X-Crawl-Gateway-Refusal: <reason>` and the
-response code details `crawl_gateway_<reason>`.
+response code details `crawl_gateway_<reason>`. A `crawl-delay` refusal also has `Retry-After`.
 
 | Reason | Status | When |
 | --- | --- | --- |
@@ -60,6 +60,7 @@ response code details `crawl_gateway_<reason>`.
 | `target` | 403 | The authority is malformed, has user information or an IPv6 zone, or names `localhost` or an internal address |
 | `robots` | 403 | robots.txt disallows the path |
 | `robots-unavailable` | 403 | robots.txt can't be fetched and no usable copy is cached |
+| `crawl-delay` | 429 | The last request let through to the origin was less than its `Crawl-delay` ago. `Retry-After` gives the seconds left |
 | `signing` | 503 | The signing key gave no signature and none is cached |
 
 The [security model](../../SECURITY.md#g2-only-a-get-or-head-without-a-body-to-a-hostname-or-a-public-address-on-the-schemes-default-port)

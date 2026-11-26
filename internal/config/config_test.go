@@ -31,6 +31,9 @@ func TestLoadValid(t *testing.T) {
 	if c.SignatureAgentForm != FormString {
 		t.Errorf("signature_agent_form defaults to %q", c.SignatureAgentForm)
 	}
+	if c.MaxCrawlDelaySeconds != DefaultMaxCrawlDelaySeconds {
+		t.Errorf("max_crawl_delay_seconds defaults to %d", c.MaxCrawlDelaySeconds)
+	}
 	if c.Listen != "/run/crawl-signer/grpc.sock" || c.RobotsAgent != "ExampleBot" ||
 		!c.TailscaleWhois ||
 		c.SigningKey.KeyID != "kid" ||
@@ -88,6 +91,7 @@ func TestLoadRefuses(t *testing.T) {
 		{"signature_agent not https", `"signature_agent":"https://bot.example.com"`, `"signature_agent":"http://bot.example.com"`},
 		{"signature_agent_form", `"robots_agent"`, `"signature_agent_form":"list","robots_agent"`},
 		{"robots_cache_bytes", `"robots_cache_bytes":1048576`, `"robots_cache_bytes":0`},
+		{"max_crawl_delay_seconds", `"robots_cache_bytes"`, `"max_crawl_delay_seconds":-1,"robots_cache_bytes"`},
 		{"no key", `"keyid":"kid","transit":{"address":"unix:///run/bao.sock","key":"web-bot-auth","version":2}`, `"keyid":"kid"`},
 		{"both keys", `"version":2}`, `"version":2},"private_key":{"filename":"k"}`},
 		{"transit keyid", `"keyid":"kid",`, ``},
@@ -102,6 +106,22 @@ func TestLoadRefuses(t *testing.T) {
 		if _, err := Load(write(t, strings.Replace(valid, tc.old, tc.new, 1))); err == nil {
 			t.Errorf("%s: want error", tc.name)
 		}
+	}
+}
+
+func TestLoadMaxCrawlDelay(t *testing.T) {
+	body := strings.Replace(
+		valid,
+		`"robots_cache_bytes"`,
+		`"max_crawl_delay_seconds":5,"robots_cache_bytes"`,
+		1,
+	)
+	c, err := Load(write(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MaxCrawlDelaySeconds != 5 {
+		t.Errorf("max_crawl_delay_seconds = %d, want 5", c.MaxCrawlDelaySeconds)
 	}
 }
 

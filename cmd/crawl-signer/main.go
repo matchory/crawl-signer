@@ -71,6 +71,7 @@ func run(path string) error {
 		m.Fetcher(&robots.HTTPFetcher{Socket: cfg.EnvoySocket}),
 		cfg.RobotsAgent,
 		cfg.RobotsCacheBytes,
+		time.Duration(cfg.MaxCrawlDelaySeconds)*time.Second,
 		time.Now,
 	)
 	m.Cache(cache)

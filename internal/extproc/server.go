@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -31,10 +33,11 @@ const (
 	schemeHTTPS    = "https"
 )
 
-// Robots decides whether robots.txt lets the crawler fetch a path;
-// *robots.Cache implements it.
+// Robots decides whether robots.txt lets the crawler fetch a path, and paces
+// requests to an origin by its Crawl-delay; *robots.Cache implements it.
 type Robots interface {
 	Check(ctx context.Context, o robots.Origin, path string) robots.Outcome
+	Pace(o robots.Origin) time.Duration
 }
 
 // Signer returns the signature headers for an authority; *sign.Signer
@@ -199,14 +202,18 @@ func (s *Server) requestHeaders(
 		return s.refuse(md, http.StatusForbidden, "target")
 	}
 
-	if reason := s.robotsVerdict(
-		ctx,
-		md,
-		internal,
-		robots.Origin{Scheme: scheme, Authority: canon},
-		r.path,
-	); reason != "" {
+	origin := robots.Origin{Scheme: scheme, Authority: canon}
+	if reason := s.robotsVerdict(ctx, md, internal, origin, r.path); reason != "" {
 		return s.refuse(md, http.StatusForbidden, reason)
+	}
+
+	if !internal {
+		// Refused, not held: waiting here would queue requests in crawl-signer.
+		if wait := s.robots.Pace(origin); wait > 0 {
+			secs := int64((wait + time.Second - 1) / time.Second)
+			return s.refuse(md, http.StatusTooManyRequests, "crawl-delay",
+				header("retry-after", strconv.FormatInt(secs, 10)))
+		}
 	}
 
 	sigAuthority := sign.SignatureAuthority(scheme, r.authority)
@@ -367,6 +374,7 @@ func (s *Server) refuse(
 	md map[string]any,
 	status int,
 	reason string,
+	extra ...*corev3.HeaderValueOption,
 ) *extprocv3.ProcessingResponse {
 	md["verdict"] = reason
 	s.count(reason)
@@ -376,7 +384,10 @@ func (s *Server) refuse(
 				//nolint:gosec // G115: status is one of net/http's constants.
 				Status: &typev3.HttpStatus{Code: typev3.StatusCode(status)},
 				Headers: &extprocv3.HeaderMutation{
-					SetHeaders: []*corev3.HeaderValueOption{header(refusalHeader, reason)},
+					SetHeaders: append(
+						[]*corev3.HeaderValueOption{header(refusalHeader, reason)},
+						extra...,
+					),
 				},
 				Details: "crawl_gateway_" + reason,
 			},

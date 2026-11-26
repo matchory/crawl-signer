@@ -4,8 +4,14 @@ What crawl-signer doesn't do, and what to do about it.
 
 ## Rates and crawl delay
 
-crawl-signer doesn't limit how fast requests go out, per origin or overall, and ignores `Crawl-delay`, which RFC 9309
-doesn't define. Keep request rates in your crawlers' scheduler, or add Envoy's
+crawl-signer paces requests to an origin only by its `Crawl-delay`, capped at
+[`max_crawl_delay_seconds`](../reference/config.md#max_crawl_delay_seconds): a request that comes too soon is refused
+with `429 crawl-delay` and a `Retry-After`, not held back. Your crawlers' scheduler retries it. An origin without
+`Crawl-delay` gets no limit, and neither does the gateway overall.
+
+The pacing is per crawl-signer instance and in memory. Two instances in front of the same origins let through two
+requests per delay, and a restart forgets when the last request went. Keep request rates in your crawlers' scheduler,
+or add Envoy's
 [local rate limit](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/local_rate_limit_filter)
 filter.
 

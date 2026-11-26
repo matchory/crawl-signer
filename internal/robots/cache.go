@@ -100,6 +100,7 @@ type entry struct {
 	allowAll bool      // a 4xx said "no robots.txt"; only valid until expires
 	expires  time.Time
 	failures int
+	next     time.Time // when Crawl-delay lets the next request go
 	elem     *list.Element
 }
 
@@ -108,6 +109,7 @@ type Cache struct {
 	f        Fetcher
 	agent    string
 	maxBytes int64
+	maxDelay time.Duration
 	now      func() time.Time
 	group    singleflight.Group
 
@@ -122,12 +124,19 @@ type Cache struct {
 }
 
 // NewCache returns a cache that applies the rules for the product token
-// agent, holding rules of at most maxBytes.
-func NewCache(f Fetcher, agent string, maxBytes int64, now func() time.Time) *Cache {
+// agent, holding rules of at most maxBytes and capping Crawl-delay at maxDelay.
+func NewCache(
+	f Fetcher,
+	agent string,
+	maxBytes int64,
+	maxDelay time.Duration,
+	now func() time.Time,
+) *Cache {
 	return &Cache{
 		f:        f,
 		agent:    agent,
 		maxBytes: maxBytes,
+		maxDelay: maxDelay,
 		now:      now,
 		entries:  map[string]*entry{},
 		lru:      list.New(),
@@ -139,16 +148,10 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 	if path == "/robots.txt" {
 		return Allowed
 	}
-	scheme := strings.ToLower(o.Scheme)
-	if scheme != schemeHTTP && scheme != schemeHTTPS {
+	o, key, ok := canonical(o)
+	if !ok {
 		return Unavailable
 	}
-	auth := sign.CanonicalAuthority(scheme, o.Authority)
-	if auth == "" {
-		return Unavailable
-	}
-	o = Origin{Scheme: scheme, Authority: auth}
-	key := scheme + "://" + auth
 
 	e, ok := c.lookup(key)
 	hit := ok && c.now().Before(e.expires)
@@ -187,6 +190,43 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 		return c.decide(e, path)
 	}
 	return Unavailable
+}
+
+// Pace takes o's next Crawl-delay slot for a request Check allowed. It
+// returns zero if the request may go now, or how long until it may. Only a
+// request that may go takes the slot. An origin with no cached entry, such as
+// one evicted since Check, isn't paced.
+func (c *Cache) Pace(o Origin) time.Duration {
+	_, key, ok := canonical(o)
+	if !ok {
+		return 0
+	}
+	now := c.now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok {
+		return 0
+	}
+	if now.Before(e.next) {
+		return e.next.Sub(now)
+	}
+	e.next = now.Add(min(e.rules.Delay, c.maxDelay))
+	return 0
+}
+
+// canonical returns o with a lowercase scheme and canonical authority, and its
+// cache key; false if o can't have a robots.txt.
+func canonical(o Origin) (Origin, string, bool) {
+	scheme := strings.ToLower(o.Scheme)
+	if scheme != schemeHTTP && scheme != schemeHTTPS {
+		return Origin{}, "", false
+	}
+	auth := sign.CanonicalAuthority(scheme, o.Authority)
+	if auth == "" {
+		return Origin{}, "", false
+	}
+	return Origin{Scheme: scheme, Authority: auth}, scheme + "://" + auth, true
 }
 
 // Stats returns the number of cached origins and their rules' size in bytes.

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -54,6 +55,8 @@ type fakeRobots struct {
 	mu      sync.Mutex
 	outcome robots.Outcome
 	calls   []robotsCall
+	wait    time.Duration
+	paced   []robots.Origin
 }
 
 func (f *fakeRobots) Check(_ context.Context, o robots.Origin, path string) robots.Outcome {
@@ -61,6 +64,13 @@ func (f *fakeRobots) Check(_ context.Context, o robots.Origin, path string) robo
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, robotsCall{o, path})
 	return f.outcome
+}
+
+func (f *fakeRobots) Pace(o robots.Origin) time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paced = append(f.paced, o)
+	return f.wait
 }
 
 type fakeSigner struct {
@@ -262,6 +272,54 @@ func TestRobotsRefusal(t *testing.T) {
 		if len(f.signer.calls) != 0 {
 			t.Errorf("%s: signed a refused request", c.reason)
 		}
+	}
+}
+
+// Guards: G1, G8
+func TestCrawlDelayRefusal(t *testing.T) {
+	for _, c := range []struct {
+		wait  time.Duration
+		retry string
+	}{{10 * time.Second, "10"}, {1500 * time.Millisecond, "2"}, {time.Millisecond, "1"}} {
+		f := newFixture()
+		f.robots.wait = c.wait
+		r := f.run(t, request(callerAddr))
+		assertRefusal(t, r, 429, "crawl-delay")
+		var got string
+		for _, h := range r.GetImmediateResponse().GetHeaders().GetSetHeaders() {
+			if h.GetHeader().GetKey() == "retry-after" {
+				got = string(h.GetHeader().GetRawValue())
+			}
+		}
+		if got != c.retry {
+			t.Errorf("wait %v: retry-after %q, want %q", c.wait, got, c.retry)
+		}
+		if len(f.signer.calls) != 0 {
+			t.Errorf("wait %v: signed a refused request", c.wait)
+		}
+	}
+}
+
+// Only a request robots.txt allows takes a slot, and internal fetches take none.
+func TestPaceOnlyAllowed(t *testing.T) {
+	for _, outcome := range []robots.Outcome{robots.Disallowed, robots.Unavailable} {
+		f := newFixture()
+		f.robots.outcome = outcome
+		f.run(t, request(callerAddr))
+		if len(f.robots.paced) != 0 {
+			t.Errorf("%v: paced", outcome)
+		}
+	}
+	f := newFixture()
+	f.run(t, internalListener(request("-", ":path", "/robots.txt")))
+	if len(f.robots.paced) != 0 {
+		t.Error("internal request paced")
+	}
+	f = newFixture()
+	f.run(t, request(callerAddr, ":authority", "Example.com"))
+	want := []robots.Origin{{Scheme: "https", Authority: "example.com"}}
+	if !slices.Equal(f.robots.paced, want) {
+		t.Errorf("paced %v, want %v", f.robots.paced, want)
 	}
 }
 

@@ -47,6 +47,21 @@ A request whose origin has no current copy waits for the fetch. Concurrent reque
 request waits at most 10 seconds; after that it is decided by the copy it would have replaced, or refused if there is
 none, while the fetch carries on, for up to 30 seconds, and fills the cache for the next request.
 
+## Crawl-delay
+
+`Crawl-delay` isn't in RFC 9309, but sites use it to ask for fewer requests. crawl-signer reads it from the same
+group as the rules, as seconds between requests, the way Bing and Yandex do, and caps it at
+[`max_crawl_delay_seconds`](../reference/config.md#max_crawl_delay_seconds).
+
+crawl-signer keeps, per origin, the time the next request may go. A request that comes earlier is refused with
+`429 crawl-delay` and `Retry-After`, instead of waiting in crawl-signer. Holding requests would be a queue with no
+bound, and Envoy gives up on crawl-signer after `message_timeout`, 15 seconds in the example, anyway. Your scheduler already handles `429`, and knows
+better than crawl-signer which request to send next. A refused request doesn't take a slot, so retrying early
+doesn't push the next one back.
+
+The time is kept on the origin's cache entry, in memory, and each instance keeps its own: the
+[limitations](limitations.md#rates-and-crawl-delay) say what follows.
+
 ## How the fetch leaves
 
 crawl-signer doesn't fetch robots.txt itself. It sends the request to Envoy's

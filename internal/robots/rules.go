@@ -3,8 +3,11 @@
 package robots
 
 import (
+	"math"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jimsmart/grobotstxt"
 )
@@ -24,11 +27,17 @@ type rule struct {
 	allow   bool
 }
 
+// delayLimit bounds a parsed Crawl-delay so that converting it can't overflow.
+const delayLimit = 24 * time.Hour
+
 // Rules is the compiled rule list of the group that applies to one agent,
 // ordered so the first match is the decision: longest pattern first, allow
 // before disallow on equal length.
 type Rules struct {
 	rules []rule
+	// Delay is the group's Crawl-delay, zero without one. RFC 9309 doesn't
+	// define it; it is read as seconds between requests, as Bing and Yandex do.
+	Delay time.Duration
 }
 
 // Parse selects the group for agent (or * if no group names it) and compiles
@@ -36,9 +45,9 @@ type Rules struct {
 func Parse(body []byte, agent string) Rules {
 	h := &collector{agent: agent}
 	grobotstxt.Parse(string(body), h)
-	rs := h.global
+	rs, delay := h.global, h.globalDelay
 	if h.everSpecific {
-		rs = h.specific
+		rs, delay = h.specific, h.specificDelay
 	}
 	sort.SliceStable(rs, func(i, j int) bool {
 		if len(rs[i].pattern) != len(rs[j].pattern) {
@@ -46,7 +55,7 @@ func Parse(body []byte, agent string) Rules {
 		}
 		return rs[i].allow && !rs[j].allow
 	})
-	return Rules{rules: rs}
+	return Rules{rules: rs, Delay: delay}
 }
 
 // Allowed reports whether path (with query) may be fetched.
@@ -85,6 +94,7 @@ type collector struct {
 	inGlobal, inSpecific, sawRule bool
 	everSpecific                  bool
 	global, specific              []rule
+	globalDelay, specificDelay    time.Duration
 }
 
 func (c *collector) HandleRobotsStart() {}
@@ -106,8 +116,28 @@ func (c *collector) HandleUserAgent(_ int, ua string) {
 func (c *collector) HandleAllow(_ int, v string)    { c.add(v, true) }
 func (c *collector) HandleDisallow(_ int, v string) { c.add(v, false) }
 
-func (c *collector) HandleSitemap(int, string)               {}
-func (c *collector) HandleUnknownAction(int, string, string) {}
+func (c *collector) HandleSitemap(int, string) {}
+
+// HandleUnknownAction reads Crawl-delay, which grobotstxt doesn't know. It
+// doesn't end a group, as in Google's parser, and the largest value wins.
+func (c *collector) HandleUnknownAction(_ int, action, value string) {
+	if !strings.EqualFold(action, "crawl-delay") || (!c.inGlobal && !c.inSpecific) {
+		return
+	}
+	s, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(s) || math.IsInf(s, 0) || s <= 0 {
+		return
+	}
+	d := delayLimit
+	if s < delayLimit.Seconds() {
+		d = time.Duration(s * float64(time.Second))
+	}
+	if c.inSpecific {
+		c.specificDelay = max(c.specificDelay, d)
+	} else {
+		c.globalDelay = max(c.globalDelay, d)
+	}
+}
 
 // token cuts a User-agent value at the first character outside an RFC 9110
 // token, so "ExampleBot/1.0" names ExampleBot.

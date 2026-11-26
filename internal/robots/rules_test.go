@@ -1,6 +1,9 @@
 package robots
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParse(t *testing.T) {
 	for _, c := range []struct {
@@ -64,6 +67,40 @@ func TestParse(t *testing.T) {
 				if got := r.Allowed(path); got != want {
 					t.Errorf("Allowed(%q) = %v, want %v", path, got, want)
 				}
+			}
+		})
+	}
+}
+
+func TestParseCrawlDelay(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		want       time.Duration
+	}{
+		{"none", "User-agent: *\nDisallow: /x\n", 0},
+		{"star group", "User-agent: *\nCrawl-delay: 5\n", 5 * time.Second},
+		{"fraction", "User-agent: ExampleBot\ncrawl-delay: 0.5\n", 500 * time.Millisecond},
+		{
+			"specific group beats star",
+			"User-agent: *\nCrawl-delay: 30\n\nUser-agent: ExampleBot\nCrawl-delay: 2\n",
+			2 * time.Second,
+		},
+		{
+			"specific group without delay has none",
+			"User-agent: *\nCrawl-delay: 30\n\nUser-agent: ExampleBot\nDisallow: /x\n",
+			0,
+		},
+		{"other agent's group", "User-agent: OtherBot\nCrawl-delay: 30\n", 0},
+		{"largest of several", "User-agent: *\nCrawl-delay: 1\nCrawl-delay: 3\n", 3 * time.Second},
+		{"negative", "User-agent: *\nCrawl-delay: -4\n", 0},
+		{"not a number", "User-agent: *\nCrawl-delay: soon\n", 0},
+		{"NaN", "User-agent: *\nCrawl-delay: NaN\n", 0},
+		{"huge", "User-agent: *\nCrawl-delay: 1e300\n", delayLimit},
+		{"infinite", "User-agent: *\nCrawl-delay: +Inf\n", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Parse([]byte(c.body), agent).Delay; got != c.want {
+				t.Errorf("Delay = %v, want %v", got, c.want)
 			}
 		})
 	}

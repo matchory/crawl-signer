@@ -40,6 +40,13 @@ sudo -u crawl-signer curl -sS -D - -o /dev/null --unix-socket /run/envoy/interna
 A refusal header in that answer means the gateway refused its own fetch, and its reason tells you why. Otherwise the
 status is the origin's. crawl-signer retries after 5 minutes, doubling up to an hour.
 
+### `crawl-delay`
+
+The origin's robots.txt has a `Crawl-delay`, and the last request through the gateway to it was more recent than that.
+Wait for `Retry-After` seconds and send it again. Many of these from one origin mean your scheduler sends to it faster
+than it asks for; pace it there, so requests aren't refused. If several callers share the gateway, they share each
+origin's delay.
+
 ### `signing`
 
 The signing key gave no signature within 2 seconds. With Transit, check that the address in

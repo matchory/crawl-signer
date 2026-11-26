@@ -96,7 +96,7 @@ func TestNotFoundAllows(t *testing.T) {
 	f := newFake(func(Origin) (Result, error) {
 		return Result{Status: 404, Body: []byte("User-agent: *\nDisallow: /")}, nil
 	})
-	c := NewCache(f, agent, 1<<20, clk.now)
+	c := NewCache(f, agent, 1<<20, time.Minute, clk.now)
 	if got := c.Check(context.Background(), example, "/a"); got != Allowed {
 		t.Fatalf("Check after 404 = %v, want Allowed", got)
 	}
@@ -116,7 +116,7 @@ func TestNotFoundAllows(t *testing.T) {
 func TestStaleOnError(t *testing.T) {
 	clk := newClock()
 	f := newFake(body("User-agent: ExampleBot\nDisallow: /x\n"))
-	c := NewCache(f, agent, 1<<20, clk.now)
+	c := NewCache(f, agent, 1<<20, time.Minute, clk.now)
 	ctx := context.Background()
 	if got := c.Check(ctx, example, "/x"); got != Disallowed {
 		t.Fatalf("fresh: Check(/x) = %v, want Disallowed", got)
@@ -143,7 +143,7 @@ func TestNotFoundIsNoStaleFallback(t *testing.T) {
 		t.Run(first, func(t *testing.T) {
 			clk := newClock()
 			f := newFake(body("User-agent: *\nDisallow: /x\n"))
-			c := NewCache(f, agent, 1<<20, clk.now)
+			c := NewCache(f, agent, 1<<20, time.Minute, clk.now)
 			ctx := context.Background()
 			if first == "200 then 404" {
 				c.Check(ctx, example, "/a")
@@ -169,7 +169,7 @@ func TestExpiredNotFoundOnWaitTimeout(t *testing.T) {
 
 	clk := newClock()
 	f := newFake(func(Origin) (Result, error) { return Result{Status: 404}, nil })
-	c := NewCache(f, agent, 1<<20, clk.now)
+	c := NewCache(f, agent, 1<<20, time.Minute, clk.now)
 	ctx := context.Background()
 	if got := c.Check(ctx, example, "/a"); got != Allowed {
 		t.Fatalf("after 404: %v, want Allowed", got)
@@ -190,7 +190,7 @@ func TestExpiredNotFoundOnWaitTimeout(t *testing.T) {
 func TestFailureBackoff(t *testing.T) {
 	clk := newClock()
 	f := newFake(func(Origin) (Result, error) { return Result{Status: 500}, nil })
-	c := NewCache(f, agent, 1<<20, clk.now)
+	c := NewCache(f, agent, 1<<20, time.Minute, clk.now)
 	ctx := context.Background()
 	if got := c.Check(ctx, example, "/"); got != Unavailable {
 		t.Fatalf("cold 500: %v, want Unavailable", got)
@@ -229,7 +229,7 @@ func TestSingleflight(t *testing.T) {
 		<-release
 		return Result{Status: 200}, nil
 	})
-	c := NewCache(f, agent, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, time.Minute, newClock().now)
 	var wg, started sync.WaitGroup
 	var allowed atomic.Int32
 	for range 50 {
@@ -264,7 +264,7 @@ func TestWaitTimeout(t *testing.T) {
 		<-release
 		return Result{Status: 200}, nil
 	})
-	c := NewCache(f, agent, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, time.Minute, newClock().now)
 	start := time.Now()
 	got := c.Check(context.Background(), example, "/a")
 	elapsed := time.Since(start)
@@ -283,7 +283,7 @@ func TestCallerContextCancels(t *testing.T) {
 		<-release
 		return Result{Status: 200}, nil
 	})
-	c := NewCache(f, agent, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, time.Minute, newClock().now)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if got := c.Check(ctx, example, "/a"); got != Unavailable {
@@ -295,7 +295,7 @@ func TestEviction(t *testing.T) {
 	const robots = "User-agent: *\nDisallow: /x\n"
 	f := newFake(body(robots))
 	size := Parse([]byte(robots), agent).Size()
-	c := NewCache(f, agent, int64(3*size), newClock().now)
+	c := NewCache(f, agent, int64(3*size), time.Minute, newClock().now)
 	ctx := context.Background()
 	o := func(h string) Origin { return Origin{Scheme: "https", Authority: h} }
 
@@ -316,7 +316,7 @@ func TestEviction(t *testing.T) {
 
 func TestRobotsPathExempt(t *testing.T) {
 	f := newFake(func(Origin) (Result, error) { return Result{}, errors.New("must not fetch") })
-	c := NewCache(f, agent, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, time.Minute, newClock().now)
 	if got := c.Check(context.Background(), example, "/robots.txt"); got != Allowed {
 		t.Fatalf("Check(/robots.txt) = %v, want Allowed", got)
 	}
@@ -327,7 +327,7 @@ func TestRobotsPathExempt(t *testing.T) {
 
 func TestCheckCanonicalisesOrigin(t *testing.T) {
 	f := newFake(body("User-agent: *\nDisallow: /x\n"))
-	c := NewCache(f, agent, 1<<20, newClock().now)
+	c := NewCache(f, agent, 1<<20, time.Minute, newClock().now)
 	ctx := context.Background()
 	c.Check(ctx, Origin{Scheme: "HTTPS", Authority: "Example.COM:443"}, "/")
 	c.Check(ctx, example, "/")
@@ -349,7 +349,7 @@ func TestCheckCanonicalisesOrigin(t *testing.T) {
 func TestLookupHookAndStats(t *testing.T) {
 	const robots = "User-agent: *\nDisallow: /x\n"
 	clk := newClock()
-	c := NewCache(newFake(body(robots)), agent, 1<<20, clk.now)
+	c := NewCache(newFake(body(robots)), agent, 1<<20, time.Minute, clk.now)
 	var hits, misses int
 	c.OnLookup = func(hit bool) {
 		if hit {
@@ -370,5 +370,82 @@ func TestLookupHookAndStats(t *testing.T) {
 	entries, bytes := c.Stats()
 	if entries != 1 || bytes != int64(Parse([]byte(robots), agent).Size()) {
 		t.Errorf("stats: %d entries, %d bytes", entries, bytes)
+	}
+}
+
+// Guards: G8
+func TestPace(t *testing.T) {
+	clk := newClock()
+	c := NewCache(
+		newFake(body("User-agent: *\nCrawl-delay: 10\n")),
+		agent,
+		1<<20,
+		time.Minute,
+		clk.now,
+	)
+	ctx := context.Background()
+
+	if got := c.Check(ctx, example, "/a"); got != Allowed {
+		t.Fatalf("Check = %v, want Allowed", got)
+	}
+	if w := c.Pace(example); w != 0 {
+		t.Fatalf("first Pace = %v, want 0", w)
+	}
+	clk.advance(4 * time.Second)
+	if w := c.Pace(example); w != 6*time.Second {
+		t.Fatalf("Pace 4s later = %v, want 6s", w)
+	}
+	// A refused request takes no slot, so asking again doesn't push the next one back.
+	clk.advance(5 * time.Second)
+	if w := c.Pace(example); w != time.Second {
+		t.Fatalf("Pace 9s later = %v, want 1s", w)
+	}
+	clk.advance(time.Second)
+	if w := c.Pace(example); w != 0 {
+		t.Fatalf("Pace 10s later = %v, want 0", w)
+	}
+	if w := c.Pace(Origin{Scheme: "HTTPS", Authority: "Example.COM:443"}); w != 10*time.Second {
+		t.Fatalf("Pace for the same origin, spelled differently = %v, want 10s", w)
+	}
+	other := Origin{Scheme: "https", Authority: "other.example"}
+	c.Check(ctx, other, "/a")
+	if w := c.Pace(other); w != 0 {
+		t.Fatalf("Pace for another origin = %v, want 0", w)
+	}
+}
+
+// Guards: G8
+func TestPaceCap(t *testing.T) {
+	clk := newClock()
+	c := NewCache(
+		newFake(body("User-agent: *\nCrawl-delay: 3600\n")),
+		agent,
+		1<<20,
+		time.Minute,
+		clk.now,
+	)
+	c.Check(context.Background(), example, "/a")
+	c.Pace(example)
+	if w := c.Pace(example); w != time.Minute {
+		t.Fatalf("Pace = %v, want the 1m cap", w)
+	}
+}
+
+func TestPaceWithoutDelay(t *testing.T) {
+	c := NewCache(
+		newFake(body("User-agent: *\nDisallow: /x\n")),
+		agent,
+		1<<20,
+		time.Minute,
+		newClock().now,
+	)
+	c.Check(context.Background(), example, "/a")
+	for range 3 {
+		if w := c.Pace(example); w != 0 {
+			t.Fatalf("Pace = %v, want 0", w)
+		}
+	}
+	if w := c.Pace(Origin{Scheme: "https", Authority: "unknown.example"}); w != 0 {
+		t.Fatalf("Pace for an origin never checked = %v, want 0", w)
 	}
 }

@@ -143,6 +143,27 @@ crawl-signer skips robots.txt only for a request whose listener metadata has
 wait on themselves. No header or attribute a caller sends can set it, and a
 request without the attribute is checked.
 
+### G8: Requests to an origin are at least its Crawl-delay apart
+
+Attackers: a caller.
+Assumes: E1, E6.
+
+crawl-signer reads `Crawl-delay` from the robots.txt group G3 applies, as
+seconds between requests, fractions allowed; the largest value in the group
+counts. A missing, negative or unparsable value means no delay. RFC 9309
+doesn't define the field. The delay is capped at `max_crawl_delay_seconds`,
+60 by default.
+
+A request robots.txt allows, `/robots.txt` included, that comes less than the
+delay after the last request crawl-signer let through to the same origin is
+refused with `429 crawl-delay` and `Retry-After` set to the seconds left,
+rounded up. A refused request doesn't move the next slot. crawl-signer holds
+no request back, so it queues nothing. crawl-signer's own robots.txt fetches
+(G7) aren't paced.
+
+The pacing state is in memory: it starts empty when crawl-signer starts, and
+for an origin dropped from the robots.txt cache.
+
 ### Environment properties
 
 | ID | Property | Ensured by |
@@ -152,6 +173,7 @@ request without the attribute is checked.
 | E3 | The host's firewall stops Envoy from connecting to internal addresses, and stops everything but Envoy from sending from the gateway's published addresses | operator |
 | E4 | Only crawl-signer can read the private key, or use the Transit key, and only for signing | operator, OpenBao or Vault policy |
 | E5 | Only intended callers can reach the callers' listener | operator |
+| E6 | One crawl-signer instance answers for the requests to an origin; each instance paces only what it lets through | operator |
 
 E5 is about cost and accountability, not about the origins: any caller gets
 only what G1 to G4 allow.
@@ -162,8 +184,10 @@ only what G1 to G4 allow.
   path, and carry no nonce, so whoever sees a request can send another to the
   same host until the signature expires, at most 60 seconds later. Origins
   see such requests come from the replayer's address, not the gateway's.
-- Load on an origin. crawl-signer doesn't limit request rates or apply
-  `Crawl-delay`; the caller's scheduler must.
+- Load on an origin beyond its `Crawl-delay` (G8). Without one, or above
+  what it allows, crawl-signer doesn't limit request rates; the caller's
+  scheduler must. Where E6 doesn't hold, n instances let n requests through
+  per delay.
 - A hostname that resolves to an internal address, where E3 does not hold.
 - Anyone who can read the private key or use the Transit key, where E4 does
   not hold. They can sign as the gateway from anywhere.

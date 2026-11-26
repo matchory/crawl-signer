@@ -68,7 +68,8 @@ Envoy's configuration is part of the security model: crawl-signer can only refus
 from [`examples/envoy.yaml`](examples/envoy.yaml), and read [Deploy with Envoy](docs/guides/deploy-with-envoy.md)
 and the [security model](SECURITY.md#security-model) before callers on other hosts use the gateway.
 
-crawl-signer doesn't limit request rates and doesn't apply `Crawl-delay`; that's for your crawlers' scheduler.
+crawl-signer refuses a request that comes sooner than the origin's `Crawl-delay` allows, with `429` and
+`Retry-After`, but doesn't otherwise limit request rates; that's for your crawlers' scheduler.
 [Limitations](docs/explanation/limitations.md) lists the rest.
 
 ## Documentation

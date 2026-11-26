@@ -21,11 +21,13 @@ type Config struct {
 	From           string `json:"from"`
 	SignatureAgent string `json:"signature_agent"`
 	// SignatureAgentForm is "string" (the default) or "dictionary".
-	SignatureAgentForm string     `json:"signature_agent_form"`
-	RobotsAgent        string     `json:"robots_agent"`
-	RobotsCacheBytes   int64      `json:"robots_cache_bytes"`
-	TailscaleWhois     bool       `json:"tailscale_whois"`
-	SigningKey         SigningKey `json:"signing_key"`
+	SignatureAgentForm string `json:"signature_agent_form"`
+	RobotsAgent        string `json:"robots_agent"`
+	RobotsCacheBytes   int64  `json:"robots_cache_bytes"`
+	// MaxCrawlDelaySeconds caps the Crawl-delay crawl-signer applies.
+	MaxCrawlDelaySeconds int        `json:"max_crawl_delay_seconds"`
+	TailscaleWhois       bool       `json:"tailscale_whois"`
+	SigningKey           SigningKey `json:"signing_key"`
 }
 
 // SigningKey says where the Ed25519 signing key is: exactly one of
@@ -67,6 +69,9 @@ const (
 	FormDictionary = "dictionary"
 )
 
+// DefaultMaxCrawlDelaySeconds is the Crawl-delay cap when none is configured.
+const DefaultMaxCrawlDelaySeconds = 60
+
 // DefaultTransitMount is the mount Transit is read from when Mount is empty.
 const DefaultTransitMount = "transit"
 
@@ -88,6 +93,10 @@ func Load(path string) (Config, error) {
 
 	if c.SignatureAgentForm == "" {
 		c.SignatureAgentForm = FormString
+	}
+
+	if c.MaxCrawlDelaySeconds == 0 {
+		c.MaxCrawlDelaySeconds = DefaultMaxCrawlDelaySeconds
 	}
 
 	if c.SigningKey.Transit != nil && c.SigningKey.Transit.Mount == "" {
@@ -174,6 +183,10 @@ func (c Config) validate() error {
 
 	if c.RobotsCacheBytes <= 0 {
 		return errors.New("config: robots_cache_bytes must be > 0")
+	}
+
+	if c.MaxCrawlDelaySeconds < 0 {
+		return errors.New("config: max_crawl_delay_seconds must not be negative")
 	}
 
 	return c.SigningKey.validate()

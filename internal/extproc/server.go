@@ -189,10 +189,12 @@ func (s *Server) requestHeaders(ctx context.Context, req *extprocv3.ProcessingRe
 	}
 	// Envoy ignores removal of host; overwritten headers are left out so
 	// the result does not depend on whether Envoy removes or sets first.
+	// Without x-forwarded-proto Envoy matches no route after the route cache
+	// is cleared; the route config strips it before the request leaves.
 	_, drop := rules.Allowlist(headers)
 	seen := map[string]bool{}
 	for _, name := range drop {
-		if name == "host" || setNames[name] || seen[name] {
+		if name == "host" || name == "x-forwarded-proto" || setNames[name] || seen[name] {
 			continue
 		}
 		seen[name] = true

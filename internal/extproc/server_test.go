@@ -262,7 +262,8 @@ func TestAllowedMutation(t *testing.T) {
 	r := f.run(t, request(callerAddr,
 		"host", "example.com", "accept", "text/html", "range", "bytes=0-1", "cookie", "a=b",
 		"user-agent", "curl/8", "from", "me@example.org", "signature", "forged",
-		"x-forwarded-for", "1.2.3.4", "x-crawl-upstream", "http", "content-length", "0"))
+		"x-forwarded-for", "1.2.3.4", "x-crawl-upstream", "http", "content-length", "0",
+		"x-forwarded-proto", "http"))
 	set, remove := mutation(t, r)
 	want := map[string]string{
 		"user-agent":      cfg.UserAgent,

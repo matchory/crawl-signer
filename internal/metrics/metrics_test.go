@@ -39,7 +39,7 @@ func TestMetrics(t *testing.T) {
 		{err: errors.New("dial")},
 	})
 	now := time.Now()
-	c := robots.NewCache(f, 1<<20, func() time.Time { return now })
+	c := robots.NewCache(f, "ExampleBot", 1<<20, func() time.Time { return now })
 	m.Cache(c)
 	ctx := context.Background()
 	c.Check(ctx, robots.Origin{Scheme: "https", Authority: "a.example"}, "/")
@@ -76,20 +76,24 @@ crawl_signer_robots_cache_misses_total 3
 crawl_signer_robots_fetch_total{outcome="2xx"} 1
 crawl_signer_robots_fetch_total{outcome="5xx"} 1
 crawl_signer_robots_fetch_total{outcome="error"} 1
-# HELP crawl_signer_transit_sign_total OpenBao Transit sign calls by result.
-# TYPE crawl_signer_transit_sign_total counter
-crawl_signer_transit_sign_total{result="error"} 1
-crawl_signer_transit_sign_total{result="ok"} 1
+# HELP crawl_signer_sign_total Signing key calls by result.
+# TYPE crawl_signer_sign_total counter
+crawl_signer_sign_total{result="error"} 1
+crawl_signer_sign_total{result="ok"} 1
 `
 	names := []string{
-		"crawl_signer_requests_total", "crawl_signer_robots_cache_bytes", "crawl_signer_robots_cache_entries",
-		"crawl_signer_robots_cache_hits_total", "crawl_signer_robots_cache_misses_total",
-		"crawl_signer_robots_fetch_total", "crawl_signer_transit_sign_total",
+		"crawl_signer_requests_total",
+		"crawl_signer_robots_cache_bytes",
+		"crawl_signer_robots_cache_entries",
+		"crawl_signer_robots_cache_hits_total",
+		"crawl_signer_robots_cache_misses_total",
+		"crawl_signer_robots_fetch_total",
+		"crawl_signer_sign_total",
 	}
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), names...); err != nil {
 		t.Error(err)
 	}
-	if n := testutil.CollectAndCount(m.signSeconds, "crawl_signer_transit_sign_seconds"); n != 1 {
+	if n := testutil.CollectAndCount(m.signSeconds, "crawl_signer_sign_seconds"); n != 1 {
 		t.Errorf("sign histogram: %d series", n)
 	}
 }

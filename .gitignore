@@ -1,3 +1,19 @@
-/crawl-signer
-/dist/
-.superpowers/
+# Build output
+/bin/
+
+# Go
+*.test
+*.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# go build ./test/e2e/origin from the root
+/origin

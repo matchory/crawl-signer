@@ -1,0 +1,8 @@
+# Gitleaks, as super-linter runs it: the default rules, plus the published
+# test key of RFC 9421 appendix B.1.4 that the signing tests use.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "RFC 9421 test key"
+regexes = ['''MC4CAQAwBQYDK2VwBCIEIJ\+DYvh6SEqVTm50DFtMDoQikTmiCqirVv9mWG9qfSnF''']

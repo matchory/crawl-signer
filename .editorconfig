@@ -1,0 +1,6 @@
+root = true
+
+# shfmt reads this: the scripts are indented with two spaces.
+[*.sh]
+indent_style = space
+indent_size = 2

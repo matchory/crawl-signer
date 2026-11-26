@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -54,6 +55,8 @@ type fakeRobots struct {
 	mu      sync.Mutex
 	outcome robots.Outcome
 	calls   []robotsCall
+	wait    time.Duration
+	paced   []robots.Origin
 }
 
 func (f *fakeRobots) Check(_ context.Context, o robots.Origin, path string) robots.Outcome {
@@ -61,6 +64,13 @@ func (f *fakeRobots) Check(_ context.Context, o robots.Origin, path string) robo
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, robotsCall{o, path})
 	return f.outcome
+}
+
+func (f *fakeRobots) Pace(o robots.Origin) time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paced = append(f.paced, o)
+	return f.wait
 }
 
 type fakeSigner struct {
@@ -75,7 +85,7 @@ func (f *fakeSigner) Headers(_ context.Context, authority string) ([]rules.Heade
 		return nil, f.err
 	}
 	return []rules.Header{
-		{Name: "Signature-Agent", Value: `sig1="https://crawler.matchory.net"`},
+		{Name: "Signature-Agent", Value: `"https://bot.example.com"`},
 		{Name: "Signature-Input", Value: "sig1=(...)"},
 		{Name: "Signature", Value: "sig1=:" + authority + ":"},
 	}, nil
@@ -93,8 +103,8 @@ func (f *fakeWhois) Lookup(_ context.Context, a netip.Addr) (whois.Caller, error
 }
 
 var cfg = config.Config{
-	UserAgent: "Mozilla/5.0 (compatible; MatchoryBot/1.0)", From: "crawler@matchory.com",
-	KeyID: "K", KeyVersion: 3,
+	UserAgent: "Mozilla/5.0 (compatible; ExampleBot/1.0)", From: "bot@example.com",
+	SigningKey: config.SigningKey{KeyID: "K"},
 }
 
 type fixture struct {
@@ -108,17 +118,26 @@ func newFixture() *fixture {
 	f := &fixture{
 		robots: &fakeRobots{outcome: robots.Allowed},
 		signer: &fakeSigner{},
-		whois:  &fakeWhois{caller: whois.Caller{Node: "whale-1", Tags: []string{"tag:crawler"}}},
+		whois: &fakeWhois{
+			caller: whois.Caller{Node: "worker-1", Tags: []string{"tag:example-crawler"}},
+		},
 	}
-	f.srv = New(cfg, f.robots, f.signer, f.whois)
+	f.srv = New(cfg, f.robots, f.robots, f.signer, f.whois)
 	return f
 }
 
+// callerAddr is a source.address in the form Envoy sends for a TCP caller,
+// address and port, as the end-to-end test sees it ("127.0.0.1:33232").
 const callerAddr = "100.101.102.103:54321"
 
 // request builds a request-headers message; source "-" omits the source.address attribute.
 func request(source string, kv ...string) *extprocv3.ProcessingRequest {
-	base := map[string]string{":method": "GET", ":scheme": "http", ":authority": "example.com", ":path": "/a"}
+	base := map[string]string{
+		":method":    "GET",
+		":scheme":    "http",
+		":authority": "example.com",
+		":path":      "/a",
+	}
 	var hs []*corev3.HeaderValue
 	for i := 0; i < len(kv); i += 2 {
 		if _, ok := base[kv[i]]; ok {
@@ -131,27 +150,43 @@ func request(source string, kv ...string) *extprocv3.ProcessingRequest {
 		hs = append([]*corev3.HeaderValue{{Key: k, RawValue: []byte(base[k])}}, hs...)
 	}
 	r := &extprocv3.ProcessingRequest{Request: &extprocv3.ProcessingRequest_RequestHeaders{
-		RequestHeaders: &extprocv3.HttpHeaders{Headers: &corev3.HeaderMap{Headers: hs}, EndOfStream: true},
+		RequestHeaders: &extprocv3.HttpHeaders{
+			Headers:     &corev3.HeaderMap{Headers: hs},
+			EndOfStream: true,
+		},
 	}}
 	if source != "-" {
-		r.Attributes = map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{
-			"source.address": structpb.NewStringValue(source),
-		}}}
+		r.Attributes = map[string]*structpb.Struct{
+			"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{
+				"source.address": structpb.NewStringValue(source),
+			}},
+		}
 	}
+	return r
+}
+
+// envoyInternalMetadata is xds.listener_metadata exactly as Envoy 1.39 and
+// 1.40 send it for examples/envoy.yaml's internal listener: the Metadata
+// message in protobuf text format, as a string.
+const envoyInternalMetadata = `filter_metadata { key: "crawl" value { fields { key: "internal" value { bool_value: true } } } } `
+
+// listenerMetadata sets r's xds.listener_metadata attribute to v.
+func listenerMetadata(
+	r *extprocv3.ProcessingRequest,
+	v *structpb.Value,
+) *extprocv3.ProcessingRequest {
+	if r.Attributes == nil {
+		r.Attributes = map[string]*structpb.Struct{
+			"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{}},
+		}
+	}
+	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = v
 	return r
 }
 
 // internalListener marks r as arriving on Envoy's internal listener.
 func internalListener(r *extprocv3.ProcessingRequest) *extprocv3.ProcessingRequest {
-	md, err := structpb.NewStruct(map[string]any{"filter_metadata": map[string]any{"crawl": map[string]any{"internal": true}}})
-	if err != nil {
-		panic(err)
-	}
-	if r.Attributes == nil {
-		r.Attributes = map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{}}}
-	}
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(md)
-	return r
+	return listenerMetadata(r, structpb.NewStringValue(envoyInternalMetadata))
 }
 
 func (f *fixture) run(t *testing.T, r *extprocv3.ProcessingRequest) *extprocv3.ProcessingResponse {
@@ -198,24 +233,28 @@ func assertRefusal(t *testing.T, r *extprocv3.ProcessingResponse, status int, re
 	}
 }
 
-func mutation(t *testing.T, r *extprocv3.ProcessingResponse) (set map[string]string, remove []string) {
+func mutation(
+	t *testing.T,
+	r *extprocv3.ProcessingResponse,
+) (map[string]string, []string) {
 	t.Helper()
 	cr := r.GetRequestHeaders().GetResponse()
 	if cr == nil || cr.GetStatus() != extprocv3.CommonResponse_CONTINUE {
 		t.Fatalf("want CONTINUE request-headers response, got %v", r)
 	}
-	set = map[string]string{}
+	set := map[string]string{}
 	for _, h := range cr.GetHeaderMutation().GetSetHeaders() {
 		if h.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
 			t.Errorf("%s: append action %v", h.GetHeader().GetKey(), h.GetAppendAction())
 		}
 		set[h.GetHeader().GetKey()] = string(h.GetHeader().GetRawValue())
 	}
-	remove = slices.Clone(cr.GetHeaderMutation().GetRemoveHeaders())
+	remove := slices.Clone(cr.GetHeaderMutation().GetRemoveHeaders())
 	sort.Strings(remove)
 	return set, remove
 }
 
+// Guards: G2
 func TestRefusal(t *testing.T) {
 	f := newFixture()
 	r := f.run(t, request(callerAddr, ":method", "POST"))
@@ -225,6 +264,7 @@ func TestRefusal(t *testing.T) {
 	}
 }
 
+// Guards: G1, G3
 func TestRobotsRefusal(t *testing.T) {
 	for _, c := range []struct {
 		outcome robots.Outcome
@@ -240,6 +280,66 @@ func TestRobotsRefusal(t *testing.T) {
 	}
 }
 
+// Guards: G1, G8
+func TestCrawlDelayRefusal(t *testing.T) {
+	for _, c := range []struct {
+		wait  time.Duration
+		retry string
+	}{{10 * time.Second, "10"}, {1500 * time.Millisecond, "2"}, {time.Millisecond, "1"}} {
+		f := newFixture()
+		f.robots.wait = c.wait
+		r := f.run(t, request(callerAddr))
+		assertRefusal(t, r, 429, "crawl-delay")
+		var got string
+		for _, h := range r.GetImmediateResponse().GetHeaders().GetSetHeaders() {
+			switch k := h.GetHeader().GetKey(); k {
+			case "retry-after":
+				got = string(h.GetHeader().GetRawValue())
+			case refusalHeader:
+			default:
+				t.Errorf("wait %v: the refusal sets %s", c.wait, k)
+			}
+		}
+		if got != c.retry {
+			t.Errorf("wait %v: retry-after %q, want %q", c.wait, got, c.retry)
+		}
+	}
+}
+
+// Guards: G8
+//
+// Only a request that goes out takes a slot, and internal fetches take none.
+func TestPaceOnlyAllowed(t *testing.T) {
+	for _, outcome := range []robots.Outcome{robots.Disallowed, robots.Unavailable} {
+		f := newFixture()
+		f.robots.outcome = outcome
+		f.run(t, request(callerAddr))
+		if len(f.robots.paced) != 0 {
+			t.Errorf("%v: paced", outcome)
+		}
+	}
+	f := newFixture()
+	f.run(t, internalListener(request("-", ":path", "/robots.txt")))
+	if len(f.robots.paced) != 0 {
+		t.Error("internal request paced")
+	}
+	// A request refused after robots.txt, for signing, sent nothing.
+	f = newFixture()
+	f.signer.err = errors.New("transit down")
+	f.run(t, request(callerAddr))
+	if len(f.robots.paced) != 0 {
+		t.Error("a request refused for signing took a slot")
+	}
+
+	f = newFixture()
+	f.run(t, request(callerAddr, ":authority", "Example.com"))
+	want := []robots.Origin{{Scheme: "https", Authority: "example.com"}}
+	if !slices.Equal(f.robots.paced, want) {
+		t.Errorf("paced %v, want %v", f.robots.paced, want)
+	}
+}
+
+// Guards: G1
 func TestSigningRefusal(t *testing.T) {
 	f := newFixture()
 	f.signer.err = errors.New("transit down")
@@ -257,6 +357,7 @@ func TestSchemeHeader(t *testing.T) {
 	}
 }
 
+// Guards: G4
 func TestAllowedMutation(t *testing.T) {
 	f := newFixture()
 	r := f.run(t, request(callerAddr,
@@ -268,14 +369,22 @@ func TestAllowedMutation(t *testing.T) {
 	want := map[string]string{
 		"user-agent":      cfg.UserAgent,
 		"from":            cfg.From,
-		"signature-agent": `sig1="https://crawler.matchory.net"`,
+		"signature-agent": `"https://bot.example.com"`,
 		"signature-input": "sig1=(...)",
 		"signature":       "sig1=:example.com:",
 	}
 	if !maps.Equal(set, want) {
 		t.Errorf("set: got %v, want %v", set, want)
 	}
-	if w := []string{"content-length", "cookie", "x-crawl-upstream", "x-forwarded-for"}; !slices.Equal(remove, w) {
+	if w := []string{
+		"content-length",
+		"cookie",
+		"x-crawl-upstream",
+		"x-forwarded-for",
+	}; !slices.Equal(
+		remove,
+		w,
+	) {
 		t.Errorf("remove: got %v, want %v", remove, w)
 	}
 	if !r.GetRequestHeaders().GetResponse().GetClearRouteCache() {
@@ -286,7 +395,7 @@ func TestAllowedMutation(t *testing.T) {
 	}
 	m := meta(t, r)
 	if m["verdict"].GetStringValue() != "ok" || m["robots"].GetStringValue() != "allowed" ||
-		m["keyid"].GetStringValue() != "K" || m["key_version"].GetNumberValue() != 3 {
+		m["keyid"].GetStringValue() != "K" {
 		t.Errorf("metadata: %v", m)
 	}
 }
@@ -306,12 +415,29 @@ func TestPlainHTTP(t *testing.T) {
 	}
 	// The scheme decides the default port: :80 is fine for http, :443 is not.
 	f = newFixture()
-	assertRefusal(t, f.run(t, request(callerAddr, "x-crawl-scheme", "http", ":authority", "example.com:443")), 403, "port")
+	assertRefusal(
+		t,
+		f.run(t, request(callerAddr, "x-crawl-scheme", "http", ":authority", "example.com:443")),
+		403,
+		"port",
+	)
 }
 
+// Guards: G5
 func TestAuthorityFromPseudoHeader(t *testing.T) {
 	f := newFixture()
-	f.run(t, request(callerAddr, ":authority", "A.Example:443", "host", "b.example", ":path", "/x%2Fy/../z?q=1"))
+	f.run(
+		t,
+		request(
+			callerAddr,
+			":authority",
+			"A.Example:443",
+			"host",
+			"b.example",
+			":path",
+			"/x%2Fy/../z?q=1",
+		),
+	)
 	want := robotsCall{robots.Origin{Scheme: "https", Authority: "a.example"}, "/x%2Fy/../z?q=1"}
 	if len(f.robots.calls) != 1 || f.robots.calls[0] != want {
 		t.Errorf("robots: got %+v, want %+v", f.robots.calls, want)
@@ -323,7 +449,8 @@ func TestAuthorityFromPseudoHeader(t *testing.T) {
 	// Envoy forwards a trailing dot, so the signature keeps it; robots does not.
 	f = newFixture()
 	f.run(t, request(callerAddr, ":authority", "A.Example.:443"))
-	if f.robots.calls[0].origin.Authority != "a.example" || !slices.Equal(f.signer.calls, []string{"a.example."}) {
+	if f.robots.calls[0].origin.Authority != "a.example" ||
+		!slices.Equal(f.signer.calls, []string{"a.example."}) {
 		t.Errorf("robots %+v, signed for %v", f.robots.calls, f.signer.calls)
 	}
 }
@@ -335,7 +462,8 @@ func TestCaller(t *testing.T) {
 		t.Errorf("whois: %v", f.whois.calls)
 	}
 	tags := m["caller_tags"].GetListValue().AsSlice()
-	if m["caller"].GetStringValue() != "whale-1" || len(tags) != 1 || tags[0] != "tag:crawler" {
+	if m["caller"].GetStringValue() != "worker-1" || len(tags) != 1 ||
+		tags[0] != "tag:example-crawler" {
 		t.Errorf("metadata: %v", m)
 	}
 
@@ -347,23 +475,37 @@ func TestCaller(t *testing.T) {
 		t.Errorf("caller on whois error: %q", c)
 	}
 
+	// Without a whois source, every caller is unknown.
+	f = newFixture()
+	f.srv = New(cfg, f.robots, f.robots, f.signer, nil)
+	r = f.run(t, request(callerAddr))
+	mutation(t, r)
+	if c := meta(t, r)["caller"].GetStringValue(); c != "unknown" {
+		t.Errorf("caller without whois: %q", c)
+	}
+
 	// A refusal still names the caller.
 	f = newFixture()
-	if c := meta(t, f.run(t, request(callerAddr, ":method", "PUT")))["caller"].GetStringValue(); c != "whale-1" {
+	if c := meta(t, f.run(t, request(callerAddr, ":method", "PUT")))["caller"].GetStringValue(); c != "worker-1" {
 		t.Errorf("caller on refusal: %q", c)
 	}
 }
 
+// Guards: G7
 func TestInternalListener(t *testing.T) {
 	for _, src := range []string{"-", "", "/run/envoy/internal.sock"} {
 		f := newFixture()
 		f.robots.outcome = robots.Disallowed
-		r := f.run(t, internalListener(request(src, ":path", "/elsewhere/robots.txt", "cookie", "x")))
+		r := f.run(
+			t,
+			internalListener(request(src, ":path", "/elsewhere/robots.txt", "cookie", "x")),
+		)
 		_, remove := mutation(t, r)
 		if len(f.robots.calls) != 0 || len(f.whois.calls) != 0 {
 			t.Errorf("%q: robots %v, whois %v", src, f.robots.calls, f.whois.calls)
 		}
-		if !slices.Equal(f.signer.calls, []string{"example.com"}) || !slices.Contains(remove, "cookie") {
+		if !slices.Equal(f.signer.calls, []string{"example.com"}) ||
+			!slices.Contains(remove, "cookie") {
 			t.Errorf("%q: signer %v, remove %v", src, f.signer.calls, remove)
 		}
 		m := meta(t, r)
@@ -374,24 +516,19 @@ func TestInternalListener(t *testing.T) {
 
 	// Static rules still apply to the signer's own fetches.
 	f := newFixture()
-	assertRefusal(t, f.run(t, internalListener(request("", ":authority", "127.0.0.1"))), 403, "target")
-}
-
-func TestCamelCaseListenerMetadata(t *testing.T) {
-	f := newFixture()
-	r := request("")
-	md, _ := structpb.NewStruct(map[string]any{"filterMetadata": map[string]any{"crawl": map[string]any{"internal": true}}})
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(md)
-	mutation(t, f.run(t, r))
-	if len(f.robots.calls) != 0 {
-		t.Error("filterMetadata not recognised as internal")
-	}
+	assertRefusal(
+		t,
+		f.run(t, internalListener(request("", ":authority", "127.0.0.1"))),
+		403,
+		"target",
+	)
 }
 
 func TestIPv6Literal(t *testing.T) {
 	f := newFixture()
 	mutation(t, f.run(t, request(callerAddr, ":authority", "[2001:DB8::1]:443")))
-	if f.robots.calls[0].origin.Authority != "[2001:db8::1]" || !slices.Equal(f.signer.calls, []string{"[2001:db8::1]"}) {
+	if f.robots.calls[0].origin.Authority != "[2001:db8::1]" ||
+		!slices.Equal(f.signer.calls, []string{"[2001:db8::1]"}) {
 		t.Errorf("robots %+v, signed for %v", f.robots.calls, f.signer.calls)
 	}
 }
@@ -404,6 +541,7 @@ func TestEmptyPortRefused(t *testing.T) {
 	}
 }
 
+// Guards: G7
 func TestOnlyListenerMetadataMakesInternal(t *testing.T) {
 	for _, src := range []string{"-", "", "/run/envoy/internal.sock", "envoy://internal_client_address/"} {
 		f := newFixture()
@@ -417,17 +555,29 @@ func TestOnlyListenerMetadataMakesInternal(t *testing.T) {
 		}
 	}
 
-	// internal must be the boolean true.
-	f := newFixture()
-	r := request(callerAddr)
-	md, _ := structpb.NewStruct(map[string]any{"filter_metadata": map[string]any{"crawl": map[string]any{"internal": "true"}}})
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(md)
-	f.run(t, r)
-	if len(f.robots.calls) != 1 {
-		t.Error("a string internal skipped robots")
+	// internal must be the boolean true, in the form Envoy sends.
+	structForm, _ := structpb.NewStruct(map[string]any{
+		"filter_metadata": map[string]any{"crawl": map[string]any{"internal": true}},
+	})
+	for name, v := range map[string]*structpb.Value{
+		"string true": structpb.NewStringValue(
+			`filter_metadata { key: "crawl" value { fields { key: "internal" value { string_value: "true" } } } }`,
+		),
+		"other namespace": structpb.NewStringValue(
+			`filter_metadata { key: "other" value { fields { key: "internal" value { bool_value: true } } } }`,
+		),
+		"malformed":   structpb.NewStringValue(`filter_metadata { key: "crawl" value { fields { key: "internal"`),
+		"struct form": structpb.NewStructValue(structForm),
+	} {
+		f := newFixture()
+		f.run(t, listenerMetadata(request(callerAddr), v))
+		if len(f.robots.calls) != 1 {
+			t.Errorf("%s: skipped robots", name)
+		}
 	}
 }
 
+// Guards: G6
 func TestVerdictCounter(t *testing.T) {
 	f := newFixture()
 	var got []string
@@ -441,9 +591,11 @@ func TestVerdictCounter(t *testing.T) {
 
 func TestOtherPhasesContinue(t *testing.T) {
 	f := newFixture()
-	s := &fakeStream{in: []*extprocv3.ProcessingRequest{{Request: &extprocv3.ProcessingRequest_ResponseHeaders{
-		ResponseHeaders: &extprocv3.HttpHeaders{},
-	}}}}
+	s := &fakeStream{
+		in: []*extprocv3.ProcessingRequest{{Request: &extprocv3.ProcessingRequest_ResponseHeaders{
+			ResponseHeaders: &extprocv3.HttpHeaders{},
+		}}},
+	}
 	if err := f.srv.Process(s); err != nil {
 		t.Fatal(err)
 	}

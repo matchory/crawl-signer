@@ -1,0 +1,4 @@
+# Disalow and Dissallow are misspellings robots.txt parsers accept on
+# purpose; the tests and docs name them.
+[codespell]
+ignore-words-list = disalow,dissallow

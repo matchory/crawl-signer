@@ -45,7 +45,8 @@ var addr = netip.MustParseAddr("100.101.102.103")
 
 func TestLookupCaches(t *testing.T) {
 	src := &fakeSource{resp: &apitype.WhoIsResponse{Node: &tailcfg.Node{
-		Name: "whale-1.tail1234.ts.net.", Tags: []string{"tag:crawler", "tag:pipeline"},
+		Name: "worker-1.tailnet-1234.ts.net.",
+		Tags: []string{"tag:example-crawler", "tag:example-batch"},
 	}}}
 	now := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
 	r := New(src, func() time.Time { return now })
@@ -54,7 +55,8 @@ func TestLookupCaches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Node != "whale-1" || !slices.Equal(c.Tags, []string{"tag:crawler", "tag:pipeline"}) {
+	if c.Node != "worker-1" ||
+		!slices.Equal(c.Tags, []string{"tag:example-crawler", "tag:example-batch"}) {
 		t.Errorf("got %+v", c)
 	}
 	if !slices.Equal(src.calls, []string{"100.101.102.103"}) {
@@ -90,8 +92,12 @@ func TestLookupNegativeCache(t *testing.T) {
 		t.Errorf("failure not cached: err %v, %d calls", err, len(src.calls))
 	}
 	now = now.Add(time.Millisecond)
-	src.err, src.resp = nil, &apitype.WhoIsResponse{Node: &tailcfg.Node{Name: "whale-1.ts.net."}}
-	if c, err := r.Lookup(context.Background(), addr); err != nil || c.Node != "whale-1" || len(src.calls) != 2 {
+	src.err, src.resp = nil, &apitype.WhoIsResponse{Node: &tailcfg.Node{Name: "worker-1.ts.net."}}
+	if c, err := r.Lookup(
+		context.Background(),
+		addr,
+	); err != nil || c.Node != "worker-1" ||
+		len(src.calls) != 2 {
 		t.Errorf("after 5 s: %+v, %v, %d calls", c, err, len(src.calls))
 	}
 }
@@ -105,7 +111,10 @@ func TestLookupEmptyName(t *testing.T) {
 }
 
 func TestCallerCancelNotCached(t *testing.T) {
-	src := &fakeSource{gate: make(chan struct{}), resp: &apitype.WhoIsResponse{Node: &tailcfg.Node{Name: "whale-1.ts.net."}}}
+	src := &fakeSource{
+		gate: make(chan struct{}),
+		resp: &apitype.WhoIsResponse{Node: &tailcfg.Node{Name: "worker-1.ts.net."}},
+	}
 	r := New(src, time.Now)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -114,7 +123,7 @@ func TestCallerCancelNotCached(t *testing.T) {
 	}
 	close(src.gate)
 	c, err := r.Lookup(context.Background(), addr)
-	if err != nil || c.Node != "whale-1" {
+	if err != nil || c.Node != "worker-1" {
 		t.Errorf("caller's cancellation was cached: %+v, %v", c, err)
 	}
 }
@@ -134,15 +143,14 @@ func TestLookupTimeoutCached(t *testing.T) {
 }
 
 func TestConcurrentLookupsShareOneQuery(t *testing.T) {
-	src := &fakeSource{gate: make(chan struct{}), resp: &apitype.WhoIsResponse{Node: &tailcfg.Node{Name: "whale-1.ts.net."}}}
+	src := &fakeSource{
+		gate: make(chan struct{}),
+		resp: &apitype.WhoIsResponse{Node: &tailcfg.Node{Name: "worker-1.ts.net."}},
+	}
 	r := New(src, time.Now)
 	var wg sync.WaitGroup
 	for range 5 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.Lookup(context.Background(), addr)
-		}()
+		wg.Go(func() { r.Lookup(context.Background(), addr) })
 	}
 	for src.count() == 0 {
 		time.Sleep(time.Millisecond)

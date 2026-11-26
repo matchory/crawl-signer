@@ -1,6 +1,9 @@
 package robots
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParse(t *testing.T) {
 	for _, c := range []struct {
@@ -9,7 +12,7 @@ func TestParse(t *testing.T) {
 	}{
 		{
 			name:    "specific group beats star",
-			body:    "User-agent: *\nDisallow: /\n\nUser-agent: MatchoryBot\nDisallow: /x\n",
+			body:    "User-agent: *\nDisallow: /\n\nUser-agent: ExampleBot\nDisallow: /x\n",
 			allowed: map[string]bool{"/a": true, "/x": false, "/x/y": false},
 		},
 		{
@@ -19,27 +22,27 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:    "longest match wins",
-			body:    "User-agent: MatchoryBot\nDisallow: /private\nAllow: /private/ok\n",
+			body:    "User-agent: ExampleBot\nDisallow: /private\nAllow: /private/ok\n",
 			allowed: map[string]bool{"/private/ok": true, "/private/ok/deep": true, "/private/x": false, "/public": true},
 		},
 		{
 			name:    "allow wins ties",
-			body:    "User-agent: MatchoryBot\nDisallow: /same\nAllow: /same\n",
+			body:    "User-agent: ExampleBot\nDisallow: /same\nAllow: /same\n",
 			allowed: map[string]bool{"/same": true},
 		},
 		{
 			name:    "wildcard and end anchor",
-			body:    "User-agent: MatchoryBot\nDisallow: /*.pdf$\n",
+			body:    "User-agent: ExampleBot\nDisallow: /*.pdf$\n",
 			allowed: map[string]bool{"/a.pdf": false, "/a.pdf?x": true, "/dir/b.pdf": false, "/a.html": true},
 		},
 		{
 			name:    "agent token is case-insensitive",
-			body:    "User-agent: matchorybot\nDisallow: /\n",
+			body:    "User-agent: examplebot\nDisallow: /\n",
 			allowed: map[string]bool{"/": false, "/a": false},
 		},
 		{
 			name:    "empty disallow allows everything",
-			body:    "User-agent: MatchoryBot\nDisallow:\n",
+			body:    "User-agent: ExampleBot\nDisallow:\n",
 			allowed: map[string]bool{"/": true, "/a": true},
 		},
 		{
@@ -49,7 +52,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:    "leading BOM is ignored",
-			body:    "\xEF\xBB\xBFUser-agent: MatchoryBot\nDisallow: /x\n",
+			body:    "\xEF\xBB\xBFUser-agent: ExampleBot\nDisallow: /x\n",
 			allowed: map[string]bool{"/x": false, "/a": true},
 		},
 		{
@@ -59,7 +62,7 @@ func TestParse(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := Parse([]byte(c.body), Agent)
+			r := Parse([]byte(c.body), agent)
 			for path, want := range c.allowed {
 				if got := r.Allowed(path); got != want {
 					t.Errorf("Allowed(%q) = %v, want %v", path, got, want)
@@ -69,10 +72,46 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestParseCrawlDelay(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		want       time.Duration
+	}{
+		{"none", "User-agent: *\nDisallow: /x\n", 0},
+		{"star group", "User-agent: *\nCrawl-delay: 5\n", 5 * time.Second},
+		{"fraction", "User-agent: ExampleBot\ncrawl-delay: 0.5\n", 500 * time.Millisecond},
+		{
+			"specific group beats star",
+			"User-agent: *\nCrawl-delay: 30\n\nUser-agent: ExampleBot\nCrawl-delay: 2\n",
+			2 * time.Second,
+		},
+		{
+			"specific group without delay has none",
+			"User-agent: *\nCrawl-delay: 30\n\nUser-agent: ExampleBot\nDisallow: /x\n",
+			0,
+		},
+		{"other agent's group", "User-agent: OtherBot\nCrawl-delay: 30\n", 0},
+		{"largest of several", "User-agent: *\nCrawl-delay: 1\nCrawl-delay: 3\n", 3 * time.Second},
+		{"negative", "User-agent: *\nCrawl-delay: -4\n", 0},
+		{"not a number", "User-agent: *\nCrawl-delay: soon\n", 0},
+		{"NaN", "User-agent: *\nCrawl-delay: NaN\n", 0},
+		{"huge", "User-agent: *\nCrawl-delay: 1e300\n", delayLimit},
+		{"infinite", "User-agent: *\nCrawl-delay: +Inf\n", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Parse([]byte(c.body), agent).Delay; got != c.want {
+				t.Errorf("Delay = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestRulesSize(t *testing.T) {
-	empty := Parse(nil, Agent).Size()
-	one := Parse([]byte("User-agent: *\nDisallow: /abc\n"), Agent).Size()
+	empty := Parse(nil, agent).Size()
+	one := Parse([]byte("User-agent: *\nDisallow: /abc\n"), agent).Size()
 	if empty <= 0 || one <= empty {
 		t.Fatalf("Size: empty %d, one rule %d", empty, one)
 	}
 }
+
+const agent = "ExampleBot"

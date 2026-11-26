@@ -20,6 +20,7 @@ type Origin struct {
 // Outcome is the robots.txt decision for one request.
 type Outcome int
 
+// The outcomes of a robots.txt check.
 const (
 	// Unavailable means no usable robots.txt copy exists; the caller must not crawl.
 	Unavailable Outcome = iota
@@ -105,6 +106,7 @@ type entry struct {
 // Cache holds each origin's rules in an LRU bounded by Rules.Size.
 type Cache struct {
 	f        Fetcher
+	agent    string
 	maxBytes int64
 	now      func() time.Time
 	group    singleflight.Group
@@ -119,8 +121,17 @@ type Cache struct {
 	OnLookup func(hit bool)
 }
 
-func NewCache(f Fetcher, maxBytes int64, now func() time.Time) *Cache {
-	return &Cache{f: f, maxBytes: maxBytes, now: now, entries: map[string]*entry{}, lru: list.New()}
+// NewCache returns a cache that applies the rules for the product token
+// agent, holding rules of at most maxBytes.
+func NewCache(f Fetcher, agent string, maxBytes int64, now func() time.Time) *Cache {
+	return &Cache{
+		f:        f,
+		agent:    agent,
+		maxBytes: maxBytes,
+		now:      now,
+		entries:  map[string]*entry{},
+		lru:      list.New(),
+	}
 }
 
 // Check decides whether robots.txt allows path on o.
@@ -128,16 +139,11 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 	if path == "/robots.txt" {
 		return Allowed
 	}
-	scheme := strings.ToLower(o.Scheme)
-	if scheme != "http" && scheme != "https" {
+	o, ok := canonical(o)
+	if !ok {
 		return Unavailable
 	}
-	auth := sign.CanonicalAuthority(scheme, o.Authority)
-	if auth == "" {
-		return Unavailable
-	}
-	o = Origin{Scheme: scheme, Authority: auth}
-	key := scheme + "://" + auth
+	key := o.key()
 
 	e, ok := c.lookup(key)
 	hit := ok && c.now().Before(e.expires)
@@ -148,6 +154,9 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 		return c.decide(e, path)
 	}
 
+	// Not ctx: the fetch outlives the request that started it, and fills
+	// the cache for the next one.
+	//nolint:contextcheck // see above
 	ch := c.group.DoChan(key, func() (any, error) {
 		// A flight that finished just before this one started has already refreshed the entry.
 		if e, ok := c.lookup(key); ok && c.now().Before(e.expires) {
@@ -162,7 +171,9 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 	defer timer.Stop()
 	select {
 	case res := <-ch:
-		return c.decide(res.Val.(entry), path)
+		e, _ := res.Val.(entry)
+
+		return c.decide(e, path)
 	case <-timer.C:
 	case <-ctx.Done():
 	}
@@ -171,6 +182,45 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 		return c.decide(e, path)
 	}
 	return Unavailable
+}
+
+// Delay returns the Crawl-delay of o's cached rules, or zero without a
+// cached copy.
+func (c *Cache) Delay(o Origin) time.Duration {
+	o, ok := canonical(o)
+	if !ok {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.entries[o.key()]; ok {
+		return e.rules.Delay
+	}
+	return 0
+}
+
+// canonical returns o with a lowercase scheme and canonical authority; false
+// if o can't have a robots.txt.
+func canonical(o Origin) (Origin, bool) {
+	scheme := strings.ToLower(o.Scheme)
+	if scheme != schemeHTTP && scheme != schemeHTTPS {
+		return Origin{}, false
+	}
+	auth := sign.CanonicalAuthority(scheme, o.Authority)
+	if auth == "" {
+		return Origin{}, false
+	}
+	return Origin{Scheme: scheme, Authority: auth}, true
+}
+
+// key is a canonical origin's cache key.
+func (o Origin) key() string { return o.Scheme + "://" + o.Authority }
+
+// Stats returns the number of cached origins and their rules' size in bytes.
+func (c *Cache) Stats() (int, int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.entries), c.bytes
 }
 
 func (c *Cache) decide(e entry, path string) Outcome {
@@ -184,13 +234,6 @@ func (c *Cache) decide(e entry, path string) Outcome {
 		return Allowed
 	}
 	return Disallowed
-}
-
-// Stats returns the number of cached origins and their rules' size in bytes.
-func (c *Cache) Stats() (entries int, bytes int64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.entries), c.bytes
 }
 
 // lookup returns a copy of key's entry and marks it recently used.
@@ -221,7 +264,10 @@ func (c *Cache) store(key string, r Result, err error) entry {
 	}
 	switch {
 	case err == nil && r.Status >= 200 && r.Status < 300:
-		e.rules, e.good, e.goodAt, e.allowAll, e.failures = Parse(r.Body, Agent), true, now, false, 0
+		e.rules, e.good, e.goodAt, e.allowAll, e.failures = Parse(
+			r.Body,
+			c.agent,
+		), true, now, false, 0
 		e.expires = now.Add(TTL(r, 0))
 	case err == nil && usable(r.Status):
 		e.rules, e.good, e.allowAll, e.failures = Rules{}, false, true, 0
@@ -236,7 +282,7 @@ func (c *Cache) store(key string, r Result, err error) entry {
 	}
 	c.bytes += int64(e.rules.Size())
 	for c.bytes > c.maxBytes && c.lru.Back() != e.elem {
-		old := c.lru.Remove(c.lru.Back()).(*entry)
+		old, _ := c.lru.Remove(c.lru.Back()).(*entry)
 		delete(c.entries, old.key)
 		c.bytes -= int64(old.rules.Size())
 	}

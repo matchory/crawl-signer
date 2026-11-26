@@ -1,4 +1,4 @@
-// Package metrics exposes the signer's Prometheus metrics. It wraps the
+// Package metrics exposes crawl-signer's Prometheus metrics. It wraps the
 // robots and sign components instead of reaching into them.
 package metrics
 
@@ -13,6 +13,7 @@ import (
 	"github.com/matchory/crawl-signer/internal/sign"
 )
 
+// Metrics holds crawl-signer's metrics.
 type Metrics struct {
 	reg         prometheus.Registerer
 	requests    *prometheus.CounterVec
@@ -23,6 +24,7 @@ type Metrics struct {
 	signSeconds prometheus.Histogram
 }
 
+// New registers crawl-signer's metrics with reg.
 func New(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		reg: reg,
@@ -30,19 +32,21 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "crawl_signer_requests_total", Help: "Requests by verdict.",
 		}, []string{"verdict"}),
 		hits: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "crawl_signer_robots_cache_hits_total", Help: "robots.txt checks answered from a fresh cache entry.",
+			Name: "crawl_signer_robots_cache_hits_total",
+			Help: "robots.txt checks answered from a fresh cache entry.",
 		}),
 		misses: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "crawl_signer_robots_cache_misses_total", Help: "robots.txt checks that needed a fetch.",
+			Name: "crawl_signer_robots_cache_misses_total",
+			Help: "robots.txt checks that needed a fetch.",
 		}),
 		fetches: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "crawl_signer_robots_fetch_total", Help: "robots.txt fetches by outcome.",
 		}, []string{"outcome"}),
 		signs: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "crawl_signer_transit_sign_total", Help: "OpenBao Transit sign calls by result.",
+			Name: "crawl_signer_sign_total", Help: "Signing key calls by result.",
 		}, []string{"result"}),
 		signSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "crawl_signer_transit_sign_seconds", Help: "OpenBao Transit sign call duration.",
+			Name: "crawl_signer_sign_seconds", Help: "Signing key call duration.",
 		}),
 	}
 	reg.MustRegister(m.requests, m.hits, m.misses, m.fetches, m.signs, m.signSeconds)
@@ -79,6 +83,7 @@ type fetcher struct {
 	f robots.Fetcher
 }
 
+// Fetcher wraps f to count robots.txt fetches by outcome.
 func (m *Metrics) Fetcher(f robots.Fetcher) robots.Fetcher { return fetcher{m, f} }
 
 func (w fetcher) Fetch(ctx context.Context, o robots.Origin) (robots.Result, error) {
@@ -96,6 +101,7 @@ type backend struct {
 	b sign.Backend
 }
 
+// Backend wraps b to count and time signing calls.
 func (m *Metrics) Backend(b sign.Backend) sign.Backend { return backend{m, b} }
 
 func (w backend) Sign(ctx context.Context, msg []byte) ([]byte, error) {

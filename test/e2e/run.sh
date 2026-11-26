@@ -17,30 +17,26 @@ OPENBAO_VERSION=${OPENBAO_VERSION:-2.7.3}
 VAULT_VERSION=${VAULT_VERSION:-2.2.2}
 
 # Images by digest: a tag can be moved, a digest can't. A new version needs
-# its digest added here.
-declare -A envoy_digests=(
-  ["1.40.2"]=sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb
-  ["1.39.6"]=sha256:1fde8efee875e4e4f6a39a90fe49d9338e1caacce5762034ef9fb4bbb9ad6aed
-)
-declare -A openbao_digests=(
-  ["2.7.3"]=sha256:ba4b133eb9586630024e71a617e66f37f29cc3534cdd46a6233e098ceded8dc9
-)
-declare -A vault_digests=(
-  ["2.2.2"]=sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6
-)
-for pair in "envoy ${ENVOY_VERSION} ${envoy_digests[${ENVOY_VERSION}]:-}" \
-  "openbao ${OPENBAO_VERSION} ${openbao_digests[${OPENBAO_VERSION}]:-}" \
-  "vault ${VAULT_VERSION} ${vault_digests[${VAULT_VERSION}]:-}"; do
-  read -r name version digest <<<"${pair}"
-  if [[ -z ${digest} ]]; then
-    echo "no digest recorded for ${name} ${version}: add it to $0" >&2
+# its digest added here. (case, not an associative array: macOS has Bash 3.2.)
+digest() {
+  case $1 in
+  envoy:1.40.2) echo sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb ;;
+  envoy:1.39.6) echo sha256:1fde8efee875e4e4f6a39a90fe49d9338e1caacce5762034ef9fb4bbb9ad6aed ;;
+  openbao:2.7.3) echo sha256:ba4b133eb9586630024e71a617e66f37f29cc3534cdd46a6233e098ceded8dc9 ;;
+  vault:2.2.2) echo sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6 ;;
+  *)
+    echo "no digest recorded for $1: add it to $0" >&2
     exit 1
-  fi
-done
+    ;;
+  esac
+}
+envoy_digest=$(digest "envoy:${ENVOY_VERSION}")
+openbao_digest=$(digest "openbao:${OPENBAO_VERSION}")
+vault_digest=$(digest "vault:${VAULT_VERSION}")
 
-export ENVOY_IMAGE="envoyproxy/envoy:v${ENVOY_VERSION}@${envoy_digests[${ENVOY_VERSION}]}"
-export OPENBAO_IMAGE="openbao/openbao:${OPENBAO_VERSION}@${openbao_digests[${OPENBAO_VERSION}]}"
-export VAULT_IMAGE="hashicorp/vault:${VAULT_VERSION}@${vault_digests[${VAULT_VERSION}]}"
+export ENVOY_IMAGE="envoyproxy/envoy:v${ENVOY_VERSION}@${envoy_digest}"
+export OPENBAO_IMAGE="openbao/openbao:${OPENBAO_VERSION}@${openbao_digest}"
+export VAULT_IMAGE="hashicorp/vault:${VAULT_VERSION}@${vault_digest}"
 export RUST_IMAGE="rust:1.100.0-slim-trixie@sha256:3b199fd6db7d709274df56565b8f4003f9e30d7bfcff9d53148c86053b7855e2"
 export ALPINE_IMAGE="alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f"
 export CURL_IMAGE="curlimages/curl:8.17.0@sha256:935d9100e9ba842cdb060de42472c7ca90cfe9a7c96e4dacb55e79e560b3ff40"
@@ -125,13 +121,17 @@ build() {
   compose build cloudflare >/dev/null
 }
 
+# Named-curve keys and SHA-256: LibreSSL, macOS's openssl, otherwise writes
+# explicit curve parameters and signs with SHA-1, which Go, BoringSSL and
+# rustls reject.
 certificates() {
-  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -nodes -sha256 -days 1 \
     -subj /CN=e2e-ca -keyout "${WORK}/ca.key" -out "${WORK}/ca.crt" 2>/dev/null
-  openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=origin.test \
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -nodes \
+    -subj /CN=origin.test \
     -keyout "${WORK}/origin.key" -out "${WORK}/origin.csr" 2>/dev/null
   openssl x509 -req -in "${WORK}/origin.csr" -CA "${WORK}/ca.crt" -CAkey "${WORK}/ca.key" \
-    -CAcreateserial -days 1 -out "${WORK}/origin.crt" \
+    -CAcreateserial -sha256 -days 1 -out "${WORK}/origin.crt" \
     -extfile <(printf 'subjectAltName=DNS:origin.test,DNS:norobots.test,DNS:broken.test,DNS:moved.test,DNS:slow.test,DNS:bot.example.com') 2>/dev/null
   chmod 644 "${WORK}"/*.crt "${WORK}"/*.key
 }
@@ -157,10 +157,9 @@ EOF
 
 # setup_file: a private key in a file, as a secret manager would deliver it,
 # and the Signature-Agent form Cloudflare verifies.
+# The key comes from Go: macOS's LibreSSL can't make an Ed25519 key.
 setup_file() {
-  openssl genpkey -algorithm ed25519 -out "${WORK}/signing.pem"
-  chmod 644 "${WORK}/signing.pem"
-  openssl pkey -in "${WORK}/signing.pem" -pubout -outform DER | tail -c 32 | base64 >"${WORK}/public-key"
+  (cd "${root}" && go run ./test/e2e/origin -genkey "${WORK}")
   signer_config '{"private_key": {"filename": "/e2e/signing.pem"}}' string
 }
 

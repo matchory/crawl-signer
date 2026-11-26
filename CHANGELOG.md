@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `signing_key`: `{"keyid": …, "transit": {"address": "unix://<bao_socket>",
     "key": <transit_key>, "version": <key_version>}}`.
   - `robots_agent` is required, and must appear in `user_agent`. 0.1.0
-    used `MatchoryBot`.
-  - `signature_agent` must be an `https://` URL.
+    used a built-in product token.
+  - `signature_agent` must be an `https://` URL with a host.
   - The Tailscale caller lookup is off unless `tailscale_whois` is `true`.
 - The metrics `crawl_signer_transit_sign_total` and
   `crawl_signer_transit_sign_seconds` are now `crawl_signer_sign_total` and
@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key as Cloudflare requires, and re-signed before each signature expires.
 
 ### Fixed
+
+- The Transit client follows no redirect and uses no proxy from the
+  environment, so the token reaches only the configured address. Go copies
+  `X-Vault-Token` to a redirect's target.
 
 - crawl-signer's own robots.txt fetches are recognised as internal. Envoy
   sends `xds.listener_metadata` in protobuf text format, which crawl-signer

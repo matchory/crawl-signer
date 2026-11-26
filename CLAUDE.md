@@ -47,8 +47,9 @@ and Actions (`shellcheck`, `shfmt`, `actionlint`, `zizmor` locally).
 ## Request flow
 
 `extproc.Server.requestHeaders`: caller (listener metadata `crawl.internal`, optional whois) → scheme
-(`X-Crawl-Scheme`) → `rules.Check` → `robots.Check` (skipped for internal) → `signer.Headers` → `mutation` (set
-identity, remove everything not allowlisted) with `ClearRouteCache`. Any refusal is an `ImmediateResponse` with
+(`X-Crawl-Scheme`) → `rules.Check` → `robots.Check` (skipped for internal) → `signer.Headers` → `Pacer.Pace`
+(skipped for internal; last, so only a request that goes out takes the slot) → `mutation` (set identity, remove
+everything not allowlisted) with `ClearRouteCache`. Any refusal is an `ImmediateResponse` with
 `x-crawl-gateway-refusal: <reason>`; the reason is also the `verdict` metadata and metric label.
 
 ## Rules that are easy to break

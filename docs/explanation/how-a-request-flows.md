@@ -47,7 +47,10 @@ sequenceDiagram
 4. **robots.txt.** From the cache, or fetched through Envoy: see [robots.txt](robots-txt.md). crawl-signer's own
    fetches skip this step; the rest apply to them.
 5. **Signature.** From the cache, or from the signing key: see [Signatures](signatures.md).
-6. **Headers.** crawl-signer tells Envoy which headers to set and which to remove, and to choose the route again.
+6. **Crawl-delay.** A request that comes sooner than the origin's `Crawl-delay` after the last one sent is refused
+   with `429`: see [robots.txt](robots-txt.md#crawl-delay). It's the last check, so only a request that goes out
+   counts. crawl-signer's own fetches skip it.
+7. **Headers.** crawl-signer tells Envoy which headers to set and which to remove, and to choose the route again.
    Envoy routes plain-http requests by the `X-Crawl-Upstream` header crawl-signer sets, then removes it with the
    headers Envoy added itself.
 

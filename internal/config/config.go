@@ -36,9 +36,9 @@ type Config struct {
 // SigningKey says where the Ed25519 signing key is: exactly one of
 // PrivateKey and Transit is set.
 type SigningKey struct {
-	// KeyID is the signature's keyid parameter. It is computed from a
-	// private key when empty, and required with Transit, whose public key
-	// crawl-signer does not read.
+	// KeyID is the signature's keyid parameter: the key's thumbprint. It is
+	// computed from a private key when empty, and required with Transit,
+	// where it is checked against the key's public part at startup.
 	KeyID      string      `json:"keyid"`
 	PrivateKey *DataSource `json:"private_key"`
 	Transit    *Transit    `json:"transit"`
@@ -180,8 +180,9 @@ func (c Config) validate() error {
 	}
 
 	// Verifiers fetch the key directory from this URL.
-	if !strings.HasPrefix(c.SignatureAgent, "https://") {
-		return errors.New("config: signature_agent must be an https:// URL")
+	if u, err := url.Parse(c.SignatureAgent); err != nil || u.Scheme != "https" || u.Host == "" ||
+		u.User != nil {
+		return errors.New("config: signature_agent must be an https:// URL with a host")
 	}
 
 	if c.RobotsCacheBytes <= 0 {

@@ -214,15 +214,6 @@ func (s *Server) requestHeaders(
 		return s.refuse(md, http.StatusForbidden, reason)
 	}
 
-	if !internal {
-		// Refused, not held: waiting here would queue requests in crawl-signer.
-		if wait := s.pacer.Pace(origin); wait > 0 {
-			secs := int64((wait + time.Second - 1) / time.Second)
-			return s.refuse(md, http.StatusTooManyRequests, "crawl-delay",
-				header("retry-after", strconv.FormatInt(secs, 10)))
-		}
-	}
-
 	sigAuthority := sign.SignatureAuthority(scheme, r.authority)
 	if sigAuthority == "" {
 		return s.refuse(md, http.StatusForbidden, "target")
@@ -231,6 +222,16 @@ func (s *Server) requestHeaders(
 	sig, err := s.signer.Headers(ctx, sigAuthority)
 	if err != nil || len(sig) == 0 {
 		return s.refuse(md, http.StatusServiceUnavailable, "signing")
+	}
+
+	// Last, so only a request that goes out takes the origin's slot. Refused,
+	// not held: waiting here would queue requests in crawl-signer.
+	if !internal {
+		if wait := s.pacer.Pace(origin); wait > 0 {
+			secs := int64((wait + time.Second - 1) / time.Second)
+			return s.refuse(md, http.StatusTooManyRequests, "crawl-delay",
+				header("retry-after", strconv.FormatInt(secs, 10)))
+		}
 	}
 
 	md["verdict"] = "ok"

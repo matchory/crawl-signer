@@ -10,8 +10,10 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -69,7 +72,20 @@ func main() {
 		"",
 		"print the JWK thumbprint of this base64 Ed25519 public key and exit",
 	)
+	genkey := flag.String(
+		"genkey",
+		"",
+		"write a new Ed25519 key to signing.pem (PKCS #8) and its public part to public-key (base64) in this directory, and exit",
+	)
 	flag.Parse()
+
+	if *genkey != "" {
+		if err := genKey(*genkey); err != nil {
+			log.Fatal(err)
+		}
+
+		return
+	}
 
 	if *thumbprint != "" {
 		pub, err := base64.StdEncoding.DecodeString(*thumbprint)
@@ -223,6 +239,32 @@ func verify(r *http.Request, pub ed25519.PublicKey) error {
 	}
 
 	return nil
+}
+
+func genKey(dir string) error {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return err
+	}
+
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return err
+	}
+
+	// Readable by the containers, which run as other users.
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	//nolint:gosec // G306: a throwaway test key, read by the signer container.
+	if err := os.WriteFile(filepath.Join(dir, "signing.pem"), pemKey, 0o644); err != nil {
+		return err
+	}
+
+	//nolint:gosec // G306: a public key, read by the origin container.
+	return os.WriteFile(
+		filepath.Join(dir, "public-key"),
+		[]byte(base64.StdEncoding.EncodeToString(pub)+"\n"),
+		0o644,
+	)
 }
 
 func jwkThumbprint(pub []byte) string {

@@ -40,7 +40,14 @@ func NewTransit(address, mount, key string, version int, token string) (*Transit
 		return nil, fmt.Errorf("transit address: %w", err)
 	}
 
-	t := &Transit{version: version, token: token, hc: &http.Client{}}
+	// The token goes to the configured address only: no proxy from the
+	// environment, and no redirect, to which Go would copy X-Vault-Token.
+	t := &Transit{version: version, token: token, hc: &http.Client{
+		Transport: &http.Transport{Proxy: nil},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}}
 	base := strings.TrimSuffix(u.String(), "/")
 
 	if u.Scheme == "unix" {

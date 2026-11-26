@@ -126,6 +126,8 @@ func newFixture() *fixture {
 	return f
 }
 
+// callerAddr is a source.address in the form Envoy sends for a TCP caller,
+// address and port, as the end-to-end test sees it ("127.0.0.1:33232").
 const callerAddr = "100.101.102.103:54321"
 
 // request builds a request-headers message; source "-" omits the source.address attribute.
@@ -290,20 +292,23 @@ func TestCrawlDelayRefusal(t *testing.T) {
 		assertRefusal(t, r, 429, "crawl-delay")
 		var got string
 		for _, h := range r.GetImmediateResponse().GetHeaders().GetSetHeaders() {
-			if h.GetHeader().GetKey() == "retry-after" {
+			switch k := h.GetHeader().GetKey(); k {
+			case "retry-after":
 				got = string(h.GetHeader().GetRawValue())
+			case refusalHeader:
+			default:
+				t.Errorf("wait %v: the refusal sets %s", c.wait, k)
 			}
 		}
 		if got != c.retry {
 			t.Errorf("wait %v: retry-after %q, want %q", c.wait, got, c.retry)
 		}
-		if len(f.signer.calls) != 0 {
-			t.Errorf("wait %v: signed a refused request", c.wait)
-		}
 	}
 }
 
-// Only a request robots.txt allows takes a slot, and internal fetches take none.
+// Guards: G8
+//
+// Only a request that goes out takes a slot, and internal fetches take none.
 func TestPaceOnlyAllowed(t *testing.T) {
 	for _, outcome := range []robots.Outcome{robots.Disallowed, robots.Unavailable} {
 		f := newFixture()
@@ -318,6 +323,14 @@ func TestPaceOnlyAllowed(t *testing.T) {
 	if len(f.robots.paced) != 0 {
 		t.Error("internal request paced")
 	}
+	// A request refused after robots.txt, for signing, sent nothing.
+	f = newFixture()
+	f.signer.err = errors.New("transit down")
+	f.run(t, request(callerAddr))
+	if len(f.robots.paced) != 0 {
+		t.Error("a request refused for signing took a slot")
+	}
+
 	f = newFixture()
 	f.run(t, request(callerAddr, ":authority", "Example.com"))
 	want := []robots.Origin{{Scheme: "https", Authority: "example.com"}}

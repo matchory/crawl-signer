@@ -96,6 +96,9 @@ Envoy's two latest minors.
 
 - Cloudflare's service itself. The test runs Cloudflare's published verifier and validator, but not the checks
   Cloudflare's network adds, such as which `Signature-Agent` form it accepts.
+- Tailscale whois. The unit tests answer for `tailscaled` with a fake, and the end-to-end test runs without Tailscale.
+  The address crawl-signer looks up is checked: Envoy sends `source.address` as address and port, the form the unit
+  tests use.
 - Throughput and latency: no test measures them.
 - The host firewall and systemd units in [Deploy with Envoy](guides/deploy-with-envoy.md). The nftables table is
   syntax-checked by hand, not in CI.

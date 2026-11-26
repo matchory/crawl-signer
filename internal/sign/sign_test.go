@@ -497,3 +497,29 @@ func TestTransitPublicKey(t *testing.T) {
 		s.Close()
 	}
 }
+
+// The token goes only to the configured address: a redirect isn't followed,
+// and no proxy from the environment is used.
+func TestTransitStaysOnItsAddress(t *testing.T) {
+	other := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("redirect followed, token %q", r.Header.Get("X-Vault-Token"))
+	}))
+	defer other.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	t.Setenv("HTTP_PROXY", other.URL)
+	t.Setenv("HTTPS_PROXY", other.URL)
+
+	tr, err := NewTransit(srv.URL, "transit", "k", 1, "s.token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Sign(context.Background(), []byte("m")); err == nil {
+		t.Error("Sign through a redirect: want error")
+	}
+	if _, err := tr.PublicKey(context.Background()); err == nil {
+		t.Error("PublicKey through a redirect: want error")
+	}
+}

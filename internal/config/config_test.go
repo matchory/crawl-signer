@@ -92,6 +92,8 @@ func TestLoadRefuses(t *testing.T) {
 		{"robots_agent not a token", `"robots_agent":"ExampleBot"`, `"robots_agent":"Example/Bot"`},
 		{"robots_agent not in user_agent", `"robots_agent":"ExampleBot"`, `"robots_agent":"OtherBot"`},
 		{"signature_agent not https", `"signature_agent":"https://bot.example.com"`, `"signature_agent":"http://bot.example.com"`},
+		{"signature_agent without host", `"signature_agent":"https://bot.example.com"`, `"signature_agent":"https://"`},
+		{"signature_agent with user", `"signature_agent":"https://bot.example.com"`, `"signature_agent":"https://u@bot.example.com"`},
 		{"signature_agent_form", `"robots_agent"`, `"signature_agent_form":"list","robots_agent"`},
 		{"robots_cache_bytes", `"robots_cache_bytes":1048576`, `"robots_cache_bytes":0`},
 		{"max_crawl_delay_seconds", `"robots_cache_bytes"`, `"max_crawl_delay_seconds":-1,"robots_cache_bytes"`},

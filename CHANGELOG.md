@@ -75,9 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An IPv6 literal with a zone, such as `[2001:db8::1%eth0]`, is refused as
   `target`. 0.1.0 accepted it in the rules and refused it only when
   signing.
+
+## [0.1.1] - 2026-11-26
+
+### Fixed
+
 - `x-forwarded-proto` is kept until the route is chosen. Without it, Envoy
   matched no route once crawl-signer cleared the route cache, and every
-  allowed request was answered with a 404.
+  allowed request was answered with a 404. The route config removes it
+  before the request leaves.
 
 ## [0.1.0] - 2026-11-25
 
@@ -94,5 +100,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metrics.
 
 [Unreleased]: https://github.com/matchory/crawl-signer/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/matchory/crawl-signer/compare/v0.1.0...v0.2.0
+[0.2.0]: https://github.com/matchory/crawl-signer/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/matchory/crawl-signer/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/matchory/crawl-signer/releases/tag/v0.1.0

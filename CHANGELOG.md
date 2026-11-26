@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-11-26
+## [0.2.0] - 2026-11-27
 
 ### Changed
 
@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses to start if its thumbprint isn't the configured `keyid`, or if
   Transit doesn't answer. The policy needs `read` on the key as well as
   `update` on `sign`.
-
+- `ext_proc` must request the attribute
+  `xds.listener_metadata.filter_metadata["crawl"]["internal"]` in place of
+  `xds.listener_metadata`, as `examples/envoy.yaml` does.
 - `Signature-Agent` is sent as a structured string, `"https://…"`, covered
   as `"signature-agent"`, by default. Cloudflare's verifier fails the
   dictionary form `sig1="https://…"` with `"signature-agent";key="sig1"`,
@@ -65,13 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Transit client follows no redirect and uses no proxy from the
   environment, so the token reaches only the configured address. Go copies
   `X-Vault-Token` to a redirect's target.
-
 - crawl-signer's own robots.txt fetches are recognised as internal. Envoy
-  sends `xds.listener_metadata` in protobuf text format, which crawl-signer
-  didn't read, so the fetches were checked like a caller's request: logged
-  as caller `unknown`, and a robots.txt redirected to another path on the
-  same origin waited on itself until the fetch timed out.
-
+  sends `xds.listener_metadata` only as a text dump, never as the struct
+  crawl-signer read, so the fetches were checked like a caller's request:
+  logged as caller `unknown`, and a robots.txt redirected to another path
+  on the same origin waited on itself until the fetch timed out.
 - An IPv6 literal with a zone, such as `[2001:db8::1%eth0]`, is refused as
   `target`. 0.1.0 accepted it in the rules and refused it only when
   signing.

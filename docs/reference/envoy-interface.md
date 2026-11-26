@@ -10,7 +10,7 @@ is a configuration that meets every requirement; the end-to-end test runs it unc
 | --- | --- | --- |
 | `processing_mode.request_header_mode` | `SEND` | The verdict is made on the request headers |
 | other `processing_mode` fields | `SKIP` or `NONE` | crawl-signer answers other phases with "continue", so sending them only costs time |
-| `request_attributes` | `source.address`, `xds.listener_metadata` | The caller's address, for [`tailscale_whois`](config.md#tailscale_whois), and the [internal listener's](#the-internal-listener) mark |
+| `request_attributes` | `source.address`, `xds.listener_metadata.filter_metadata["crawl"]["internal"]` | The caller's address, for [`tailscale_whois`](config.md#tailscale_whois), and the [internal listener's](#the-internal-listener) mark as a bool |
 | `failure_mode_allow` | `false` | Without it, a request crawl-signer doesn't answer leaves unchecked and unsigned |
 | `metadata_options.receiving_namespaces.untyped` | `[crawl]` | Lets the [dynamic metadata](#dynamic-metadata) reach the access log |
 | `message_timeout` | at least `13s` | crawl-signer can wait 10 seconds for robots.txt and 2 for a signature |
@@ -95,5 +95,6 @@ metadata:
 ```
 
 For such a request, crawl-signer skips the robots.txt check, which would wait on the fetch in progress. It applies
-every other rule. Envoy may convert the metadata's key to `filter_metadata` or `filterMetadata`; crawl-signer reads
-both.
+every other rule. crawl-signer reads the mark from the request attribute
+`xds.listener_metadata.filter_metadata["crawl"]["internal"]`, which Envoy evaluates to a bool. It doesn't read
+`xds.listener_metadata` itself, which Envoy sends only as a text dump.

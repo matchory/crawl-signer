@@ -28,7 +28,7 @@ properties it relies on. Tests that verify a guarantee carry its ID
 none.
 
 A *caller* is a program that sends requests through the gateway. An *origin*
-is a website the gateway sends them to.
+is a site the gateway sends them to.
 
 ### G1: Nothing reaches an origin unchecked or unsigned
 
@@ -163,6 +163,26 @@ no request back, so it queues nothing. crawl-signer's own robots.txt fetches
 
 The pacing state is in memory: it starts empty when crawl-signer starts, and
 for an origin dropped from the robots.txt cache.
+
+### G9: The key directory signs nothing a requester chooses
+
+Attackers: anyone who can reach `directory_listen`.
+Assumes: E4.
+
+The directory listener answers only `GET` and `HEAD` for
+`/.well-known/http-message-signatures-directory`. Its signature covers the
+authority of `signature_agent` and the digest of a body crawl-signer builds
+from the public key; nothing in the request goes into it. The tag
+`http-message-signatures-directory` keeps it from passing as a request
+signature, which carries `web-bot-auth`. A copy of the directory under
+another authority doesn't verify.
+
+crawl-signer signs the directory at most once per 50 minutes, so requests to
+the listener can't make it call the signing key more often. A signature is
+valid for an hour; without one, the listener answers `503`.
+
+A Transit key's public part is read from Transit at startup; if its
+thumbprint isn't the configured `keyid`, crawl-signer doesn't start.
 
 ### Environment properties
 

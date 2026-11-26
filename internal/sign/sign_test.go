@@ -447,3 +447,47 @@ func TestTransitSendsNoTokenWhenEmpty(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestTransitPublicKey(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/keys-mount/keys/web-bot-auth" ||
+			r.Header.Get("X-Vault-Token") != "tok" {
+			t.Errorf("bad request %s %s", r.Method, r.URL.Path)
+		}
+		w.Write(
+			[]byte(
+				`{"data":{"type":"ed25519","keys":{"1":{"public_key":"AAAA"},"2":{"public_key":"` +
+					base64.StdEncoding.EncodeToString(pub) + `"}}}}`,
+			),
+		)
+	}))
+	defer srv.Close()
+
+	tr, err := NewTransit(srv.URL, "keys-mount", "web-bot-auth", 2, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := tr.PublicKey(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(pub) {
+		t.Fatalf("PublicKey = %x, want %x", got, pub)
+	}
+
+	for name, body := range map[string]string{
+		"missing version": `{"data":{"type":"ed25519","keys":{"1":{"public_key":"` + base64.StdEncoding.EncodeToString(pub) + `"}}}}`,
+		"wrong type":      `{"data":{"type":"rsa-2048","keys":{"2":{"public_key":"` + base64.StdEncoding.EncodeToString(pub) + `"}}}}`,
+		"short key":       `{"data":{"type":"ed25519","keys":{"2":{"public_key":"AAAA"}}}}`,
+	} {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(body))
+		}))
+		tr, _ := NewTransit(s.URL, "transit", "web-bot-auth", 2, "")
+		if _, err := tr.PublicKey(context.Background()); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+		s.Close()
+	}
+}

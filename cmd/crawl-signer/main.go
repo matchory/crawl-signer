@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"tailscale.com/client/local"
 
 	"github.com/matchory/crawl-signer/internal/config"
+	"github.com/matchory/crawl-signer/internal/directory"
 	"github.com/matchory/crawl-signer/internal/extproc"
 	"github.com/matchory/crawl-signer/internal/metrics"
 	"github.com/matchory/crawl-signer/internal/robots"
@@ -99,8 +101,23 @@ func run(path string) error {
 
 	g := grpc.NewServer()
 	extprocv3.RegisterExternalProcessorServer(g, srv)
-	errc := make(chan error, 2)
+	errc := make(chan error, 3)
 	go func() { errc <- g.Serve(lis) }()
+
+	var dirSrv *http.Server
+	if cfg.DirectoryListen != "" {
+		d, err := keyDirectory(cfg, m.Backend(backend), backend, keyid)
+		if err != nil {
+			g.Stop()
+			return err
+		}
+		dirSrv = &http.Server{
+			Addr:              cfg.DirectoryListen,
+			Handler:           d,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() { errc <- fmt.Errorf("directory: %w", dirSrv.ListenAndServe()) }()
+	}
 
 	var metricsSrv *http.Server
 	if cfg.MetricsListen != "" {
@@ -126,12 +143,49 @@ func run(path string) error {
 	if metricsSrv != nil {
 		metricsSrv.Close()
 	}
+	if dirSrv != nil {
+		dirSrv.Close()
+	}
 	// Each ext_proc stream is one HTTP request, so draining is quick; the
 	// timer only cuts off a stuck stream.
 	t := time.AfterFunc(10*time.Second, g.Stop)
 	defer t.Stop()
 	g.GracefulStop()
 	return nil
+}
+
+// keyDirectory returns the key directory for the signing key, signing through
+// b. A Transit key's public key is read from Transit, and must have the
+// configured keyid, so the directory and the signatures name the same key.
+func keyDirectory(
+	cfg config.Config,
+	b sign.Backend,
+	key sign.Backend,
+	keyid string,
+) (*directory.Directory, error) {
+	var pub ed25519.PublicKey
+
+	switch k := key.(type) {
+	case *sign.LocalKey:
+		pub = k.Public()
+	case *sign.Transit:
+		var err error
+		if pub, err = k.PublicKey(context.Background()); err != nil {
+			return nil, fmt.Errorf("directory: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("directory: no public key for a %T", key)
+	}
+
+	if t := sign.Thumbprint(pub); t != keyid {
+		return nil, fmt.Errorf(
+			"directory: signing_key.keyid is %s, but the Transit key's thumbprint is %s",
+			keyid,
+			t,
+		)
+	}
+
+	return directory.New(b, pub, cfg.SignatureAgent, time.Now)
 }
 
 // signingBackend opens the configured key and returns it with its keyid. A

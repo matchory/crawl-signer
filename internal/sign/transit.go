@@ -3,6 +3,7 @@ package sign
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,7 +25,8 @@ const (
 // Transit signs with an OpenBao or Vault Transit key. The private key stays
 // in the server; crawl-signer only sends what it needs signed.
 type Transit struct {
-	endpoint string
+	endpoint string // the sign path
+	keys     string // the key's read path, for its public key
 	version  int
 	token    string
 	hc       *http.Client
@@ -51,6 +54,7 @@ func NewTransit(address, mount, key string, version int, token string) (*Transit
 	}
 
 	t.endpoint = base + "/v1/" + strings.Trim(mount, "/") + "/sign/" + url.PathEscape(key)
+	t.keys = base + "/v1/" + strings.Trim(mount, "/") + "/keys/" + url.PathEscape(key)
 
 	return t, nil
 }
@@ -75,11 +79,7 @@ func (t *Transit) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	if t.token != "" {
-		req.Header.Set("X-Vault-Token", t.token)
-	}
-
-	resp, err := t.hc.Do(req)
+	resp, err := t.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("transit sign: %w", err)
 	}
@@ -106,4 +106,62 @@ func (t *Transit) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 	}
 
 	return base64.StdEncoding.DecodeString(parts[2])
+}
+
+// PublicKey reads the public key of the configured key version, which needs
+// read access to the key in addition to sign.
+func (t *Transit) PublicKey(ctx context.Context) (ed25519.PublicKey, error) {
+	ctx, cancel := context.WithTimeout(ctx, transitTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.keys, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := t.do(req)
+	if err != nil {
+		return nil, fmt.Errorf("transit key: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("transit key: status %d", resp.StatusCode)
+	}
+
+	var out struct {
+		Data struct {
+			Type string `json:"type"`
+			Keys map[string]struct {
+				PublicKey string `json:"public_key"`
+			} `json:"keys"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponse)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("transit key: decode: %w", err)
+	}
+
+	if out.Data.Type != "ed25519" {
+		return nil, fmt.Errorf("transit key: type %q, not ed25519", out.Data.Type)
+	}
+
+	k, ok := out.Data.Keys[strconv.Itoa(t.version)]
+	if !ok {
+		return nil, fmt.Errorf("transit key: no version %d", t.version)
+	}
+
+	pub, err := base64.StdEncoding.DecodeString(k.PublicKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return nil, errors.New("transit key: malformed public key")
+	}
+
+	return ed25519.PublicKey(pub), nil
+}
+
+func (t *Transit) do(req *http.Request) (*http.Response, error) {
+	if t.token != "" {
+		req.Header.Set("X-Vault-Token", t.token)
+	}
+
+	return t.hc.Do(req)
 }

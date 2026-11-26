@@ -45,8 +45,9 @@ cluster if that matters to you.
 
 ## The key directory
 
-crawl-signer signs requests, not your key directory: you publish and sign that yourself.
-[Become a verified bot](../guides/become-a-verified-bot.md) shows how.
+The directory crawl-signer serves with [`directory_listen`](../reference/config.md#directory_listen) lists only the key
+it signs with. A key rotation needs both keys listed for a while, so serve the directory from your site for that
+time: [Become a verified bot](../guides/become-a-verified-bot.md#serve-it-yourself).
 
 ## Signature components
 

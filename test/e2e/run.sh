@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # End-to-end test: Envoy with examples/envoy.yaml, crawl-signer, an origin
-# that verifies signatures with its own code, and OpenBao for Transit. Runs
-# once with a private key file and once with a Transit key.
+# that verifies signatures with its own code, Cloudflare's verifiers, and
+# OpenBao and Vault for Transit. Runs with a private key file, a Transit key
+# in OpenBao and one in Vault.
 #
 # Needs Docker with Compose, jq, openssl and Go.
-# ENVOY_VERSION and OPENBAO_VERSION choose the versions; docs/testing.md
-# lists the rest.
+# ENVOY_VERSION, OPENBAO_VERSION and VAULT_VERSION choose the versions;
+# docs/testing.md lists the rest.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -13,6 +14,7 @@ root=$(cd ../.. && pwd)
 
 ENVOY_VERSION=${ENVOY_VERSION:-1.40.2}
 OPENBAO_VERSION=${OPENBAO_VERSION:-2.7.3}
+VAULT_VERSION=${VAULT_VERSION:-2.2.2}
 
 # Images by digest: a tag can be moved, a digest can't. A new version needs
 # its digest added here.
@@ -23,8 +25,12 @@ declare -A envoy_digests=(
 declare -A openbao_digests=(
   ["2.7.3"]=sha256:ba4b133eb9586630024e71a617e66f37f29cc3534cdd46a6233e098ceded8dc9
 )
+declare -A vault_digests=(
+  ["2.2.2"]=sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6
+)
 for pair in "envoy ${ENVOY_VERSION} ${envoy_digests[${ENVOY_VERSION}]:-}" \
-  "openbao ${OPENBAO_VERSION} ${openbao_digests[${OPENBAO_VERSION}]:-}"; do
+  "openbao ${OPENBAO_VERSION} ${openbao_digests[${OPENBAO_VERSION}]:-}" \
+  "vault ${VAULT_VERSION} ${vault_digests[${VAULT_VERSION}]:-}"; do
   read -r name version digest <<<"${pair}"
   if [[ -z ${digest} ]]; then
     echo "no digest recorded for ${name} ${version}: add it to $0" >&2
@@ -34,6 +40,8 @@ done
 
 export ENVOY_IMAGE="envoyproxy/envoy:v${ENVOY_VERSION}@${envoy_digests[${ENVOY_VERSION}]}"
 export OPENBAO_IMAGE="openbao/openbao:${OPENBAO_VERSION}@${openbao_digests[${OPENBAO_VERSION}]}"
+export VAULT_IMAGE="hashicorp/vault:${VAULT_VERSION}@${vault_digests[${VAULT_VERSION}]}"
+export RUST_IMAGE="rust:1.100.0-slim-trixie@sha256:3b199fd6db7d709274df56565b8f4003f9e30d7bfcff9d53148c86053b7855e2"
 export ALPINE_IMAGE="alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f"
 export CURL_IMAGE="curlimages/curl:8.17.0@sha256:935d9100e9ba842cdb060de42472c7ca90cfe9a7c96e4dacb55e79e560b3ff40"
 
@@ -84,6 +92,14 @@ fetch() {
 }
 
 is() { [[ $1 == "$2" ]]; }
+# cloudflare_verifies X: Cloudflare's verifier accepts the signature of the
+# request in body, for the public key X (base64url).
+cloudflare_verifies() { compose exec -T cloudflare wba-verify "$1" <<<"${body}" >/dev/null; }
+# cloudflare_validates_directory: Cloudflare's validator accepts the key
+# directory the bot's site forwards to crawl-signer.
+cloudflare_validates_directory() {
+  compose exec -T cloudflare http-signature-directory https://bot.example.com >/dev/null
+}
 body_is() { jq -e "$1" <<<"${body}" >/dev/null 2>&1; }
 refused() { is "${status}" "$1" && is "${refusal}" "$2"; }
 # logged FILTER: Envoy's access log has a line FILTER selects. Envoy writes
@@ -106,6 +122,7 @@ build() {
   (cd "${root}" && make build GOARCH="${arch}" >/dev/null)
   cp "${root}/bin/crawl-signer_linux_${arch}" "${WORK}/crawl-signer"
   (cd "${root}" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build -o "${WORK}/origin" ./test/e2e/origin)
+  compose build cloudflare >/dev/null
 }
 
 certificates() {
@@ -115,7 +132,7 @@ certificates() {
     -keyout "${WORK}/origin.key" -out "${WORK}/origin.csr" 2>/dev/null
   openssl x509 -req -in "${WORK}/origin.csr" -CA "${WORK}/ca.crt" -CAkey "${WORK}/ca.key" \
     -CAcreateserial -days 1 -out "${WORK}/origin.crt" \
-    -extfile <(printf 'subjectAltName=DNS:origin.test,DNS:norobots.test,DNS:broken.test,DNS:moved.test,DNS:slow.test') 2>/dev/null
+    -extfile <(printf 'subjectAltName=DNS:origin.test,DNS:norobots.test,DNS:broken.test,DNS:moved.test,DNS:slow.test,DNS:bot.example.com') 2>/dev/null
   chmod 644 "${WORK}"/*.crt "${WORK}"/*.key
 }
 
@@ -126,6 +143,7 @@ signer_config() {
   "listen": "/run/crawl-signer/grpc.sock",
   "envoy_socket": "/run/envoy/internal.sock",
   "metrics_listen": "0.0.0.0:9100",
+  "directory_listen": "0.0.0.0:9200",
   "user_agent": "Mozilla/5.0 (compatible; ExampleBot/1.0; +https://bot.example.com)",
   "from": "bot@example.com",
   "signature_agent": "https://bot.example.com",
@@ -146,26 +164,32 @@ setup_file() {
   signer_config '{"private_key": {"filename": "/e2e/signing.pem"}}' string
 }
 
-# setup_transit: a Transit key in OpenBao; crawl-signer reads the token
-# from its environment. The dictionary form of later Web Bot Auth drafts.
-setup_transit() {
-  compose up --detach --wait openbao >/dev/null
+# transit SERVICE CLI FORM: a Transit key in OpenBao or Vault; crawl-signer
+# reads the token from its environment.
+transit() {
+  local service=$1 cli=$2 form=$3 keyid
+  compose up --detach --wait "${service}" >/dev/null
   for _ in $(seq 50); do
-    compose exec -T openbao bao status >/dev/null 2>&1 && break
+    compose exec -T "${service}" "${cli}" status >/dev/null 2>&1 && break
     sleep 0.2
   done
-  compose exec -T openbao bao secrets enable transit >/dev/null
-  compose exec -T openbao bao write -f transit/keys/web-bot-auth type=ed25519 >/dev/null
-  compose exec -T openbao bao read -format=json transit/keys/web-bot-auth |
+  compose exec -T "${service}" "${cli}" secrets enable transit >/dev/null
+  compose exec -T "${service}" "${cli}" write -f transit/keys/web-bot-auth type=ed25519 >/dev/null
+  compose exec -T "${service}" "${cli}" read -format=json transit/keys/web-bot-auth |
     jq -r '.data.keys["1"].public_key' >"${WORK}/public-key"
-  local keyid
   keyid=$(cd "${root}" && go run ./test/e2e/origin -thumbprint "$(cat "${WORK}/public-key")")
-  signer_config "{\"keyid\": \"${keyid}\", \"transit\": {\"address\": \"http://openbao:8200\",
-    \"key\": \"web-bot-auth\", \"version\": 1, \"token\": {\"environment_variable\": \"BAO_TOKEN\"}}}" dictionary
+  signer_config "{\"keyid\": \"${keyid}\", \"transit\": {\"address\": \"http://${service}:8200\",
+    \"key\": \"web-bot-auth\", \"version\": 1, \"token\": {\"environment_variable\": \"BAO_TOKEN\"}}}" "${form}"
 }
 
+# setup_transit: OpenBao, and the dictionary form of later Web Bot Auth drafts.
+setup_transit() { transit openbao bao dictionary; }
+
+# setup_vault: Vault, and the form Cloudflare verifies.
+setup_vault() { transit vault vault string; }
+
 start() {
-  compose up --detach origin signer envoy client >/dev/null
+  compose up --detach origin signer envoy client cloudflare >/dev/null
   for _ in $(seq 100); do
     fetch http://origin.test/
     [[ ${status} != 000 ]] && return
@@ -187,6 +211,15 @@ run_checks() {
     body_is '.headers["User-Agent"] == ["Mozilla/5.0 (compatible; ExampleBot/1.0; +https://bot.example.com)"]'
   check "it carries From" body_is '.headers["From"] == ["bot@example.com"]'
   check "it keeps an allowlisted header" body_is '.headers["Accept"] == ["text/html"]'
+
+  # Guards: G1
+  local x
+  x=$(base64 -d <"${WORK}/public-key" | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+  fetch http://origin.test/page
+  check "Cloudflare's verifier accepts the signature" cloudflare_verifies "${x}"
+
+  # Guards: G9
+  check "Cloudflare's validator accepts the key directory" cloudflare_validates_directory
 
   # Guards: G4
   fetch http://origin.test/page -H 'User-Agent: spoof' -H 'Cookie: a=b' -H 'Authorization: Bearer x' \
@@ -246,7 +279,7 @@ run_checks() {
 
 build
 certificates
-for variant in file:string transit:dictionary; do
+for variant in file:string transit:dictionary vault:string; do
   key=${variant%:*} form=${variant#*:}
   echo "Envoy ${ENVOY_VERSION}, signing key: ${key}, Signature-Agent: ${form}"
   "setup_${key}"

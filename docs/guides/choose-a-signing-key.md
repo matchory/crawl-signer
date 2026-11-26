@@ -49,6 +49,15 @@ path "transit/sign/web-bot-auth" {
 EOF
 ```
 
+If crawl-signer serves your [key directory](become-a-verified-bot.md#publish-the-key-directory), it also reads the
+key's public part once at startup. Add this to the policy:
+
+```hcl
+path "transit/keys/web-bot-auth" {
+  capabilities = ["read"]
+}
+```
+
 `vault` takes the same commands. Give crawl-signer a token with this policy in one of two ways:
 
 - **Behind a proxy.** Run [OpenBao Proxy](https://openbao.org/docs/agent-and-proxy/proxy/) or Vault Agent on the same
@@ -72,7 +81,8 @@ EOF
   }
   ```
 
-crawl-signer can't read the key's public part, so compute its `keyid` once, from the public key Transit reports. The
+crawl-signer reads the key's public part only for the key directory, so compute its `keyid` once, from the public key
+Transit reports. With the directory on, crawl-signer refuses to start if the `keyid` is wrong. The
 same commands give the `x` you publish in your [key directory](become-a-verified-bot.md):
 
 ```bash
@@ -91,7 +101,8 @@ signature's `keyid` there:
 
 1. Create the new key: a new file, or `bao write -f transit/keys/web-bot-auth/rotate`.
 2. Add its public key to your directory, next to the old one, and wait until verifiers have it. Cloudflare asks you
-   to contact them for a key rotation.
+   to contact them for a key rotation. The directory crawl-signer serves lists only the key it signs with, so serve
+   the directory from your site for the overlap.
 3. Point crawl-signer at the new key: the new file, or `version` and `keyid` for Transit. Restart it.
 4. Once no signature with the old `keyid` is valid, 60 seconds later, remove the old key from the directory.
 

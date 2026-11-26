@@ -1,6 +1,6 @@
 # Getting started
 
-By the end of this page, a request you send through Envoy reaches a website with your bot's `User-Agent` and a
+By the end of this page, a request you send through Envoy reaches a site with your bot's `User-Agent` and a
 Web Bot Auth signature, and a request robots.txt disallows is refused.
 
 You need a Linux host (amd64 or arm64) with Docker, `curl`, `jq` and `openssl`, and access to the internet. Envoy runs

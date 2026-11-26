@@ -5,14 +5,63 @@ Sites that check Web Bot Auth signatures need your public key. You publish it in
 that, a verifier such as Cloudflare recognises every request from your gateway as your bot, whatever address it
 comes from.
 
-You need the gateway running ([Deploy with Envoy](deploy-with-envoy.md)), an HTTPS site at your `signature_agent`
-URL, such as `https://bot.example.com`, and your signing key's public part and `keyid`
-([Choose a signing key](choose-a-signing-key.md)).
+You need the gateway running ([Deploy with Envoy](deploy-with-envoy.md)) and an HTTPS site at your
+`signature_agent` URL, such as `https://bot.example.com`, that can forward one path to crawl-signer.
 
 ## Publish the key directory
 
 The directory is a JSON Web Key Set at `/.well-known/http-message-signatures-directory` on the `signature_agent`
-origin, served over HTTPS:
+origin, served over HTTPS. Cloudflare also requires the response to prove you hold each key it lists, with a
+signature that expires
+([Cloudflare's requirements](https://developers.cloudflare.com/bots/reference/bot-verification/web-bot-auth/)), so
+the directory can't be a static file. crawl-signer serves it, signed with the key it signs requests with.
+
+1. Set [`directory_listen`](../reference/config.md#directory_listen) and restart crawl-signer:
+
+   ```json
+   "directory_listen": "127.0.0.1:9200"
+   ```
+
+   With a Transit key, the policy also needs `read` on the key:
+   [Choose a signing key](choose-a-signing-key.md#a-transit-key).
+
+2. Forward the path from your site to it. With Caddy:
+
+   ```text
+   bot.example.com {
+     reverse_proxy /.well-known/http-message-signatures-directory 127.0.0.1:9200
+   }
+   ```
+
+   With nginx:
+
+   ```nginx
+   location = /.well-known/http-message-signatures-directory {
+     proxy_pass http://127.0.0.1:9200;
+   }
+   ```
+
+   If your site runs on another host, listen on an address that host can reach, and let only it in. The directory is
+   public, but each request to the listener is answered by crawl-signer.
+
+The signature covers your `signature_agent` authority, whichever `Host` your site forwards, and is valid for an hour.
+crawl-signer signs a new one 10 minutes before the old one expires, and sends `Cache-Control: max-age=300`, so a
+cached copy is still valid when it's used. If crawl-signer can't sign, it answers `503`: an unsigned directory fails
+verification anyway.
+
+Check the result with Cloudflare's validator, [`http-signature-directory`](https://crates.io/crates/http-signature-directory):
+
+```bash
+cargo install http-signature-directory
+http-signature-directory https://bot.example.com
+```
+
+It reports each key and whether its proof verifies.
+
+### Serve it yourself
+
+To list more than one key, as during a [rotation](choose-a-signing-key.md#rotate-the-key), serve the directory from
+your site. The body is:
 
 ```json
 {
@@ -26,16 +75,8 @@ origin, served over HTTPS:
 }
 ```
 
-`x` is the raw 32-byte public key, base64url-encoded without padding. Never include `d`, the private part.
-[Choose a signing key](choose-a-signing-key.md#a-transit-key) shows how to get `x` from a file or from Transit; for
-a file:
-
-```bash
-openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '='
-```
-
-Cloudflare also requires the directory's response to prove you hold each key it lists
-([Cloudflare's requirements](https://developers.cloudflare.com/bots/reference/bot-verification/web-bot-auth/)):
+`x` is the raw 32-byte public key, base64url-encoded without padding. Never include `d`, the private part. The
+response needs:
 
 - the content type `application/http-message-signatures-directory+json`;
 - a `Content-Digest` header with the body's SHA-256;
@@ -43,20 +84,8 @@ Cloudflare also requires the directory's response to prove you hold each key it 
   `"content-digest"`, with `keyid` set to the key's thumbprint, `alg="ed25519"`, `created`, `expires` and
   `tag="http-message-signatures-directory"`.
 
-crawl-signer doesn't serve or sign the directory: your site at the `signature_agent` URL does. Cloudflare's
-[`web-bot-auth` repository](https://github.com/cloudflare/web-bot-auth) has a signing library and an example that
-serves a signed directory from a Cloudflare Worker. With a Transit key, the directory's signatures come from Transit
-too: `bao write transit/sign/web-bot-auth input=<base64 signature base>`, with a policy that allows it to whatever
-produces the directory.
-
-Check the result with Cloudflare's validator, [`http-signature-directory`](https://crates.io/crates/http-signature-directory):
-
-```bash
-cargo install http-signature-directory
-http-signature-directory https://bot.example.com
-```
-
-It reports each key and whether its proof verifies.
+Cloudflare's [`web-bot-auth` repository](https://github.com/cloudflare/web-bot-auth) has a signing library and an
+example that serves a signed directory from a Cloudflare Worker.
 
 ## Register with Cloudflare
 

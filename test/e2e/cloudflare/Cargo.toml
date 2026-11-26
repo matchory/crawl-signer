@@ -1,0 +1,11 @@
+[package]
+name = "wba-verify"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MPL-2.0"
+description = "Verifies a request the e2e origin received with Cloudflare's web-bot-auth crate"
+
+[dependencies]
+serde_json = "1"
+web-bot-auth = "=0.8.0"

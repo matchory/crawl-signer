@@ -1,9 +1,14 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/matchory/crawl-signer/internal/config"
+	"github.com/matchory/crawl-signer/internal/sign"
 )
 
 // The key from RFC 9421 appendix B.1.4 and its RFC 7638 thumbprint.
@@ -65,5 +70,26 @@ func TestSigningBackendTransitKeepsKeyID(t *testing.T) {
 	)
 	if err != nil || b == nil || keyid != "transit-kid" {
 		t.Errorf("got %v, %q, %v", b, keyid, err)
+	}
+}
+
+func TestKeyDirectoryChecksTransitKeyID(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"data":{"type":"ed25519","keys":{"1":{"public_key":"` +
+			base64.StdEncoding.EncodeToString(pub) + `"}}}}`))
+	}))
+	defer srv.Close()
+	tr, err := sign.NewTransit(srv.URL, "transit", "web-bot-auth", 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{SignatureAgent: "https://bot.example.com"}
+
+	if _, err := keyDirectory(cfg, tr, tr, sign.Thumbprint(pub)); err != nil {
+		t.Errorf("matching keyid: %v", err)
+	}
+	if _, err := keyDirectory(cfg, tr, tr, "other"); err == nil {
+		t.Error("mismatched keyid: want error")
 	}
 }

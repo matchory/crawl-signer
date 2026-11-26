@@ -60,7 +60,7 @@ Use one term for one concept.
 | Use | Meaning | Not |
 | --- | --- | --- |
 | caller | A program that sends requests through the gateway | client, crawler, worker |
-| origin | A website the gateway sends a request to | target site, upstream, server |
+| origin | A site the gateway sends a request to | target site, upstream, server |
 | gateway | Envoy and crawl-signer together | proxy, egress |
 | refuse | What crawl-signer does to a request it doesn't let through | reject, deny, block |
 | verdict | `ok`, or the reason a request was refused | decision, result |

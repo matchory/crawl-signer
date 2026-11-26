@@ -14,12 +14,15 @@ import (
 // Config is the whole configuration file. docs/reference/config.md describes
 // every field.
 type Config struct {
-	Listen         string `json:"listen"`
-	EnvoySocket    string `json:"envoy_socket"`
-	MetricsListen  string `json:"metrics_listen"`
-	UserAgent      string `json:"user_agent"`
-	From           string `json:"from"`
-	SignatureAgent string `json:"signature_agent"`
+	Listen        string `json:"listen"`
+	EnvoySocket   string `json:"envoy_socket"`
+	MetricsListen string `json:"metrics_listen"`
+	// DirectoryListen, if set, is the TCP address the key directory is
+	// served on.
+	DirectoryListen string `json:"directory_listen"`
+	UserAgent       string `json:"user_agent"`
+	From            string `json:"from"`
+	SignatureAgent  string `json:"signature_agent"`
 	// SignatureAgentForm is "string" (the default) or "dictionary".
 	SignatureAgentForm string `json:"signature_agent_form"`
 	RobotsAgent        string `json:"robots_agent"`

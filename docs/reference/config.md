@@ -14,6 +14,7 @@ and prints which. A change takes effect at the next start. Secrets are read once
   "listen": "/run/crawl-signer/grpc.sock",
   "envoy_socket": "/run/envoy/internal.sock",
   "metrics_listen": "127.0.0.1:9100",
+  "directory_listen": "127.0.0.1:9200",
   "user_agent": "Mozilla/5.0 (compatible; ExampleBot/1.0; +https://bot.example.com)",
   "from": "bot@example.com",
   "signature_agent": "https://bot.example.com",
@@ -52,6 +53,17 @@ crawl does. See [Envoy interface](envoy-interface.md#the-internal-listener).
 
 Where crawl-signer serves Prometheus metrics at `/metrics`, such as `127.0.0.1:9100`. Without it, there is no metrics
 endpoint. [Metrics](metrics.md) lists them.
+
+## `directory_listen`
+
+| Type | Default |
+| --- | --- |
+| TCP address | none |
+
+Where crawl-signer serves your signed key directory at `/.well-known/http-message-signatures-directory`, such as
+`127.0.0.1:9200`. Your site at [`signature_agent`](#signature_agent) forwards that path here. Without it, crawl-signer
+serves no directory. With a Transit key, crawl-signer reads the key's public part at startup, which needs `read` on
+the key. [Become a verified bot](../guides/become-a-verified-bot.md#publish-the-key-directory) sets it up.
 
 ## `user_agent`
 

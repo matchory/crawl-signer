@@ -81,7 +81,7 @@ crawl-signer refuses a request that comes sooner than the origin's `Crawl-delay`
   [become a verified bot](docs/guides/become-a-verified-bot.md),
   [verify a release](docs/guides/verify-a-release.md), [troubleshoot](docs/guides/troubleshoot.md)
 - Reference: [configuration](docs/reference/config.md), [Envoy interface](docs/reference/envoy-interface.md),
-  [metrics](docs/reference/metrics.md)
+  [metrics](docs/reference/metrics.md), [compatibility](docs/reference/compatibility.md)
 - Explanation: [how a request flows](docs/explanation/how-a-request-flows.md),
   [robots.txt](docs/explanation/robots-txt.md), [signatures](docs/explanation/signatures.md),
   [limitations](docs/explanation/limitations.md)

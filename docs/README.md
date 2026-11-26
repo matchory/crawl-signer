@@ -11,6 +11,7 @@
 | Look up a setting | [Configuration](reference/config.md) |
 | Configure Envoy, or read its access log | [Envoy interface](reference/envoy-interface.md) |
 | Monitor the gateway | [Metrics](reference/metrics.md) |
+| Know what an upgrade can change, and which versions work | [Compatibility](reference/compatibility.md) |
 | Understand what happens to a request | [How a request flows](explanation/how-a-request-flows.md) |
 | Know how robots.txt is applied | [robots.txt](explanation/robots-txt.md) |
 | Know what a signature covers | [Signatures](explanation/signatures.md) |

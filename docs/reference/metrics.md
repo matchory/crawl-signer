@@ -11,7 +11,7 @@ format, along with the Go runtime's and the process's standard metrics (`go_*`, 
 | `crawl_signer_robots_fetch_total` | counter | `outcome` | robots.txt fetches, by `2xx`, `3xx`, `4xx`, `5xx` or `error` (no answer, a refusal by the gateway, too many redirects) |
 | `crawl_signer_robots_cache_entries` | gauge | | Origins in the robots.txt cache |
 | `crawl_signer_robots_cache_bytes` | gauge | | Estimated size of the cached rules, against [`robots_cache_bytes`](config.md#robots_cache_bytes) |
-| `crawl_signer_sign_total` | counter | `result` | Calls to the signing key, by `ok` or `error` |
+| `crawl_signer_sign_total` | counter | `result` | Calls to the signing key, by `ok` or `error`, for requests and the key directory |
 | `crawl_signer_sign_seconds` | histogram | | Duration of calls to the signing key |
 
 `crawl_signer_sign_total` has both labels from the start, so a `rate()` sees the first error. A call to the signing

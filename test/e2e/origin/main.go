@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -57,6 +59,11 @@ func main() {
 	)
 	certFile := flag.String("cert", "", "TLS certificate")
 	keyFile := flag.String("key", "", "TLS key")
+	directory := flag.String(
+		"directory",
+		"",
+		"URL that bot.example.com, the bot's own site, forwards requests to",
+	)
 	thumbprint := flag.String(
 		"thumbprint",
 		"",
@@ -75,7 +82,12 @@ func main() {
 		return
 	}
 
-	h := handler(func() ed25519.PublicKey {
+	dir, err := url.Parse(*directory)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	h := handler(httputil.NewSingleHostReverseProxy(dir), func() ed25519.PublicKey {
 		b, err := os.ReadFile(*pubFile)
 		if err != nil {
 			return nil
@@ -102,10 +114,17 @@ func main() {
 }
 
 // handler reads the public key per request, so the test can start the
-// origin before it knows the key.
-func handler(publicKey func() ed25519.PublicKey) http.Handler {
+// origin before it knows the key. bot.example.com is the bot's own site,
+// which forwards to crawl-signer's key directory, as an operator's would.
+func handler(site http.Handler, publicKey func() ed25519.PublicKey) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := strings.Cut(r.Host, ":")
+
+		if host == "bot.example.com" {
+			site.ServeHTTP(w, r)
+
+			return
+		}
 
 		if r.URL.Path == "/robots.txt" {
 			switch host {

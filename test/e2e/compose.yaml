@@ -12,17 +12,26 @@ services:
       BAO_TOKEN: root
       SKIP_SETCAP: "true"
 
+  vault:
+    image: ${VAULT_IMAGE}
+    command: >-
+      server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_TOKEN: root
+      SKIP_SETCAP: "true"
+
   # One website under several names, each with its own robots.txt.
   origin:
     image: ${ALPINE_IMAGE}
     command: >-
       /e2e/origin -public-key /e2e/public-key
-      -cert /e2e/origin.crt -key /e2e/origin.key
+      -cert /e2e/origin.crt -key /e2e/origin.key -directory http://signer:9200
     volumes:
       - ${WORK}:/e2e:ro
     networks:
       default:
-        aliases: [origin.test, norobots.test, broken.test, moved.test, slow.test]
+        aliases: [origin.test, norobots.test, broken.test, moved.test, slow.test, bot.example.com]
 
   signer:
     image: ${ALPINE_IMAGE}
@@ -54,6 +63,16 @@ services:
     image: ${CURL_IMAGE}
     entrypoint: ["sleep", "infinity"]
     network_mode: service:envoy
+
+  # Cloudflare's verifiers, built from crates.io.
+  cloudflare:
+    build:
+      context: cloudflare
+      args:
+        RUST_IMAGE: ${RUST_IMAGE}
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - ${WORK}/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro
 
 volumes:
   envoy-run:

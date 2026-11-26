@@ -31,6 +31,9 @@ func TestLoadValid(t *testing.T) {
 	if c.SignatureAgentForm != FormString {
 		t.Errorf("signature_agent_form defaults to %q", c.SignatureAgentForm)
 	}
+	if c.DirectoryListen != "" {
+		t.Errorf("directory_listen defaults to %q", c.DirectoryListen)
+	}
 	if c.MaxCrawlDelaySeconds != DefaultMaxCrawlDelaySeconds {
 		t.Errorf("max_crawl_delay_seconds defaults to %d", c.MaxCrawlDelaySeconds)
 	}
@@ -106,6 +109,22 @@ func TestLoadRefuses(t *testing.T) {
 		if _, err := Load(write(t, strings.Replace(valid, tc.old, tc.new, 1))); err == nil {
 			t.Errorf("%s: want error", tc.name)
 		}
+	}
+}
+
+func TestLoadDirectoryListen(t *testing.T) {
+	body := strings.Replace(
+		valid,
+		`"metrics_listen"`,
+		`"directory_listen":"127.0.0.1:9200","metrics_listen"`,
+		1,
+	)
+	c, err := Load(write(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DirectoryListen != "127.0.0.1:9200" {
+		t.Errorf("directory_listen = %q", c.DirectoryListen)
 	}
 }
 

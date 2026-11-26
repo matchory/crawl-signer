@@ -55,9 +55,9 @@ group as the rules, as seconds between requests, the way Bing and Yandex do, and
 
 crawl-signer keeps, per origin, the time the next request may go. A request that comes earlier is refused with
 `429 crawl-delay` and `Retry-After`, instead of waiting in crawl-signer. Holding requests would be a queue with no
-bound, and Envoy gives up on crawl-signer after `message_timeout`, 15 seconds in the example, anyway. Your scheduler already handles `429`, and knows
-better than crawl-signer which request to send next. A refused request doesn't take a slot, so retrying early
-doesn't push the next one back.
+bound, and Envoy gives up on crawl-signer after `message_timeout` anyway, 15 seconds in the example. Your scheduler
+already handles `429`, and knows better than crawl-signer which request to send next. A refused request doesn't
+take a slot, so retrying early doesn't push the next one back.
 
 The time is kept on the origin's cache entry, in memory, and each instance keeps its own: the
 [limitations](limitations.md#rates-and-crawl-delay) say what follows.

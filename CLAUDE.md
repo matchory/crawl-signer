@@ -36,6 +36,7 @@ and Actions (`shellcheck`, `shfmt`, `actionlint`, `zizmor` locally).
 | `internal/rules` | Static request rules and the header allowlist; standard library only |
 | `internal/robots` | robots.txt parsing (grobotstxt), the per-origin cache, and the fetcher through Envoy's internal listener |
 | `internal/sign` | Signature base, the per-authority signature cache, and the `Backend`s: `LocalKey` and `Transit` |
+| `internal/directory` | The signed key directory `directory_listen` serves |
 | `internal/extproc` | The ext_proc server: one verdict per request, header mutation, dynamic metadata |
 | `internal/whois` | Optional Tailscale caller lookup |
 | `internal/metrics` | Prometheus metrics, as decorators around the fetcher and the backend |
@@ -54,7 +55,7 @@ identity, remove everything not allowlisted) with `ClearRouteCache`. Any refusal
 
 - Fail closed. Anything crawl-signer can't decide on is refused.
 - Keep `host` and `x-forwarded-proto` out of `RemoveHeaders`: Envoy matches no route without `x-forwarded-proto`
-  after the route cache is cleared. The e2e test catches this; unit tests don't.
+  after the route cache is cleared. The end-to-end test catches this; unit tests don't.
 - Two authority forms (`internal/sign/base.go`): `CanonicalAuthority` keys the caches; `SignatureAuthority` is
   `@authority` and keeps a trailing dot, because Envoy forwards it as received.
 - `Signature-Agent` defaults to the structured-string form (`"https://…"`, no `key` parameter): Cloudflare fails the
@@ -62,9 +63,9 @@ identity, remove everything not allowlisted) with `ClearRouteCache`. Any refusal
 - A local key's keyid is its RFC 7638 thumbprint; a configured keyid that differs stops startup.
 - robots.txt fetches and whois queries run on their own contexts and timeouts, so a caller giving up never poisons a
   cache. Time is injected (`now func() time.Time`); timeouts tests shorten are package variables.
-- A test that proves a guarantee carries `// Guards: G<n>` (Go) or `# Guards: G<n>` before a `check` block (e2e).
+- A test that proves a guarantee carries `// Guards: G<n>` (Go) or `# Guards: G<n>` before a `check` block (end-to-end).
   `security_test.go` fails if a guarantee has none or a marker marks no test.
-- `examples/envoy.yaml` is what the e2e test runs. Change Envoy behaviour there, then in the docs.
+- `examples/envoy.yaml` is what the end-to-end test runs. Change Envoy behaviour there, then in the docs.
 
 ## Standards
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-26
+
 ### Changed
 
 - `Signature-Agent` is sent as a structured string, `"https://…"`, covered
@@ -41,10 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crawl-signer, OpenBao and an origin that verifies every signature.
 - Fuzz tests, the security model in `SECURITY.md` with a test per
   guarantee, and documentation.
+- The end-to-end test checks signatures and the key directory with
+  Cloudflare's `web-bot-auth` and `http-signature-directory` crates, and
+  runs against Vault as well as OpenBao. `docs/reference/compatibility.md`
+  lists what stays stable and which versions are supported.
 - `Crawl-delay` is applied per origin: a request that comes sooner than the
   delay after the last one let through is refused with `429 crawl-delay`
   and `Retry-After`. The delay is capped by the new
   `max_crawl_delay_seconds`, 60 by default. Each instance paces on its own.
+- `directory_listen` serves the key directory at
+  `/.well-known/http-message-signatures-directory`, signed with the signing
+  key as Cloudflare requires, and re-signed before each signature expires.
+  With Transit, crawl-signer reads the key's public part at startup and
+  refuses to start if its thumbprint isn't the configured `keyid`.
 
 ### Fixed
 
@@ -69,5 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The caller's Tailscale node in Envoy's dynamic metadata, and Prometheus
   metrics.
 
-[Unreleased]: https://github.com/matchory/crawl-signer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/matchory/crawl-signer/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/matchory/crawl-signer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/matchory/crawl-signer/releases/tag/v0.1.0

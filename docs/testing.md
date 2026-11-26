@@ -72,25 +72,30 @@ origin for Docker's architecture, then starts, from `test/e2e/compose.yaml`:
 | --- | --- |
 | `envoy` | Envoy with `examples/envoy.yaml`, unchanged, trusting a CA the test creates |
 | `signer` | crawl-signer |
-| `origin` | `test/e2e/origin`: one website under four names with different robots.txt answers, which verifies every request's signature with its own code and answers with what it received |
-| `openbao` | OpenBao in dev mode, for the Transit key |
-| `client` | curl, in Envoy's network namespace, as a caller on the gateway host |
+| `origin` | `test/e2e/origin`: one site under several names with different robots.txt answers, which verifies every request's signature with its own code and answers with what it received. As `bot.example.com`, it is the bot's own site, forwarding the key directory to crawl-signer |
+| `openbao`, `vault` | OpenBao and Vault in dev mode, for the Transit key |
+| `cloudflare` | Cloudflare's verifiers, built from crates.io in `test/e2e/cloudflare`: `wba-verify` checks a request's signature with the `web-bot-auth` crate, and `http-signature-directory` checks the key directory |
+| `client` | `curl`, in Envoy's network namespace, as a caller on the gateway host |
 
-It runs twice: with a private key file and the `string` Signature-Agent form, then with a Transit key, a token from
-the environment and the `dictionary` form. Each run checks that an allowed request arrives over TLS with a
-signature that verifies, the configured identity and only allowlisted headers; that a caller can't replace the
-signature, the `User-Agent` or the scheme; that robots.txt is applied through a 404, a 503 and a redirect; that the
-rules refuse a POST, a body, another port and internal addresses; that Envoy's access log and the metrics record the
-verdicts; and that nothing is sent once crawl-signer stops.
+It runs three times: with a private key file and the `string` Signature-Agent form, with a Transit key in OpenBao, a
+token from the environment and the `dictionary` form, and with a Transit key in Vault and the `string` form. Each run
+checks that an allowed request arrives over TLS with a signature that both the test origin and Cloudflare's verifier
+accept, the configured identity and only allowlisted headers; that Cloudflare's validator accepts the key directory;
+that a caller can't replace the signature, the `User-Agent` or the scheme; that robots.txt is applied through a 404,
+a 503 and a redirect, and `Crawl-delay` with a 429; that the rules refuse a POST, a body, another port and internal
+addresses; that Envoy's access log and the metrics record the verdicts; and that nothing is sent once crawl-signer
+stops.
 
-`ENVOY_VERSION` and `OPENBAO_VERSION` choose the versions, and the script records the image digest of each: a new
-version needs its digest added to `run.sh`. CI runs the newest release of Envoy's two latest minors.
+`ENVOY_VERSION`, `OPENBAO_VERSION` and `VAULT_VERSION` choose the versions, and the script records the image digest
+of each: a new version needs its digest added to `run.sh`. The Rust image that builds Cloudflare's verifiers is
+pinned the same way, and `test/e2e/cloudflare/Cargo.lock` pins their dependencies. CI runs the newest release of
+Envoy's two latest minors.
 `E2E_PAUSE=600` keeps the containers running for ten minutes after a failure.
 
 ## What no test covers
 
-- A real verifier. The test origin implements the checks Cloudflare documents, but it isn't Cloudflare.
-- The key directory, which crawl-signer doesn't serve.
+- Cloudflare's service itself. The test runs Cloudflare's published verifier and validator, but not the checks
+  Cloudflare's network adds, such as which `Signature-Agent` form it accepts.
 - Throughput and latency: no test measures them.
 - The host firewall and systemd units in [Deploy with Envoy](guides/deploy-with-envoy.md). The nftables table is
   syntax-checked by hand, not in CI.

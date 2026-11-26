@@ -77,10 +77,10 @@ check() {
 fetch() {
   local out
   out=$(compose exec -T client curl -sS --max-time 20 --proxy http://127.0.0.1:3128 \
-    -w '\n%{http_code} %header{x-crawl-gateway-refusal}' "$@" || true)
+    -w '\n%{http_code}|%header{x-crawl-gateway-refusal}|%header{retry-after}' "$@" || true)
   body=$(sed '$d' <<<"${out}")
-  read -r status refusal <<<"$(tail -n 1 <<<"${out}")"
-  refusal=${refusal:-}
+  IFS='|' read -r status refusal retry_after <<<"$(tail -n 1 <<<"${out}")"
+  refusal=${refusal:-} retry_after=${retry_after:-}
 }
 
 is() { [[ $1 == "$2" ]]; }
@@ -115,7 +115,7 @@ certificates() {
     -keyout "${WORK}/origin.key" -out "${WORK}/origin.csr" 2>/dev/null
   openssl x509 -req -in "${WORK}/origin.csr" -CA "${WORK}/ca.crt" -CAkey "${WORK}/ca.key" \
     -CAcreateserial -days 1 -out "${WORK}/origin.crt" \
-    -extfile <(printf 'subjectAltName=DNS:origin.test,DNS:norobots.test,DNS:broken.test,DNS:moved.test') 2>/dev/null
+    -extfile <(printf 'subjectAltName=DNS:origin.test,DNS:norobots.test,DNS:broken.test,DNS:moved.test,DNS:slow.test') 2>/dev/null
   chmod 644 "${WORK}"/*.crt "${WORK}"/*.key
 }
 
@@ -211,6 +211,13 @@ run_checks() {
   check "a 5xx robots.txt refuses everything" refused 403 robots-unavailable
   fetch http://moved.test/private
   check "a redirected robots.txt is followed" refused 403 robots
+
+  # Guards: G8
+  fetch http://slow.test/page
+  check "the first request under a Crawl-delay goes through" is "${status}" 200
+  fetch http://slow.test/page
+  check "the next one within the delay is refused" refused 429 crawl-delay
+  check "the refusal says when to retry" bash -c "[[ ${retry_after} =~ ^[0-9]+$ && ${retry_after} -ge 1 && ${retry_after} -le 30 ]]"
 
   # Guards: G2
   fetch http://origin.test/page -X POST

@@ -113,6 +113,8 @@ func handler(publicKey func() ed25519.PublicKey) http.Handler {
 				http.NotFound(w, r)
 			case "broken.test":
 				http.Error(w, "down", http.StatusServiceUnavailable)
+			case "slow.test":
+				_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 30\n"))
 			case "moved.test":
 				http.Redirect(w, r, "https://origin.test/robots.txt", http.StatusMovedPermanently)
 			default:

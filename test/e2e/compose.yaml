@@ -22,7 +22,7 @@ services:
       - ${WORK}:/e2e:ro
     networks:
       default:
-        aliases: [origin.test, norobots.test, broken.test, moved.test]
+        aliases: [origin.test, norobots.test, broken.test, moved.test, slow.test]
 
   signer:
     image: ${ALPINE_IMAGE}

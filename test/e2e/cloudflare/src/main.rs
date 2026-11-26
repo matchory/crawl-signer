@@ -36,23 +36,34 @@ impl SignedMessage for Request {
                     .filter_map(|v| v.as_str().map(String::from));
                 // The crate leaves component parameters to the message: with
                 // key=, the value is that dictionary member's (RFC 9421 2.1.2).
-                // A plain split suffices for the members this test sends.
                 match parameters.0.iter().find_map(|p| match p {
                     HTTPFieldParameters::Key(k) => Some(k.clone()),
                     _ => None,
                 }) {
-                    Some(key) => values
-                        .flat_map(|v| {
-                            v.split(',')
-                                .filter_map(|m| m.trim().strip_prefix(&format!("{key}=")).map(String::from))
-                                .collect::<Vec<_>>()
-                        })
+                    Some(key) => member(&values.collect::<Vec<_>>().join(", "), &key)
+                        .into_iter()
                         .collect(),
                     None => values.collect(),
                 }
             }
             _ => vec![],
         }
+    }
+}
+
+/// The serialized value of the dictionary member `key` of a field.
+fn member(field: &str, key: &str) -> Option<String> {
+    let dictionary = sfv::Parser::new(field)
+        .parse_dictionary::<sfv::Dictionary>()
+        .ok()?;
+    match dictionary.get(key)? {
+        sfv::ListEntry::Item(item) => Some(
+            sfv::ItemSerializer::new()
+                .bare_item(&item.bare_item)
+                .parameters(&item.params)
+                .finish(),
+        ),
+        sfv::ListEntry::InnerList(_) => None,
     }
 }
 

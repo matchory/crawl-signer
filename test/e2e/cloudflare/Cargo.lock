@@ -744,6 +744,7 @@ name = "wba-verify"
 version = "0.0.0"
 dependencies = [
  "serde_json",
+ "sfv",
  "web-bot-auth",
 ]
 

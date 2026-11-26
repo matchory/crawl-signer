@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- With Transit, crawl-signer reads the key's public part at startup and
+  refuses to start if its thumbprint isn't the configured `keyid`, or if
+  Transit doesn't answer. The policy needs `read` on the key as well as
+  `update` on `sign`.
+
 - `Signature-Agent` is sent as a structured string, `"https://…"`, covered
   as `"signature-agent"`, by default. Cloudflare's verifier fails the
   dictionary form `sig1="https://…"` with `"signature-agent";key="sig1"`,
@@ -54,10 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `directory_listen` serves the key directory at
   `/.well-known/http-message-signatures-directory`, signed with the signing
   key as Cloudflare requires, and re-signed before each signature expires.
-  With Transit, crawl-signer reads the key's public part at startup and
-  refuses to start if its thumbprint isn't the configured `keyid`.
 
 ### Fixed
+
+- crawl-signer's own robots.txt fetches are recognised as internal. Envoy
+  sends `xds.listener_metadata` in protobuf text format, which crawl-signer
+  didn't read, so the fetches were checked like a caller's request: logged
+  as caller `unknown`, and a robots.txt redirected to another path on the
+  same origin waited on itself until the fetch timed out.
 
 - An IPv6 literal with a zone, such as `[2001:db8::1%eth0]`, is refused as
   `target`. 0.1.0 accepted it in the rules and refused it only when

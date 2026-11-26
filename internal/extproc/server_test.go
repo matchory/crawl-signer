@@ -122,7 +122,7 @@ func newFixture() *fixture {
 			caller: whois.Caller{Node: "worker-1", Tags: []string{"tag:example-crawler"}},
 		},
 	}
-	f.srv = New(cfg, f.robots, f.signer, f.whois)
+	f.srv = New(cfg, f.robots, f.robots, f.signer, f.whois)
 	return f
 }
 
@@ -163,25 +163,28 @@ func request(source string, kv ...string) *extprocv3.ProcessingRequest {
 	return r
 }
 
-// internalListener marks r as arriving on Envoy's internal listener.
-func internalListener(r *extprocv3.ProcessingRequest) *extprocv3.ProcessingRequest {
-	md, err := structpb.NewStruct(
-		map[string]any{
-			"filter_metadata": map[string]any{"crawl": map[string]any{"internal": true}},
-		},
-	)
-	if err != nil {
-		panic(err)
-	}
+// envoyInternalMetadata is xds.listener_metadata exactly as Envoy 1.39 and
+// 1.40 send it for examples/envoy.yaml's internal listener: the Metadata
+// message in protobuf text format, as a string.
+const envoyInternalMetadata = `filter_metadata { key: "crawl" value { fields { key: "internal" value { bool_value: true } } } } `
+
+// listenerMetadata sets r's xds.listener_metadata attribute to v.
+func listenerMetadata(
+	r *extprocv3.ProcessingRequest,
+	v *structpb.Value,
+) *extprocv3.ProcessingRequest {
 	if r.Attributes == nil {
 		r.Attributes = map[string]*structpb.Struct{
 			"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{}},
 		}
 	}
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(
-		md,
-	)
+	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = v
 	return r
+}
+
+// internalListener marks r as arriving on Envoy's internal listener.
+func internalListener(r *extprocv3.ProcessingRequest) *extprocv3.ProcessingRequest {
+	return listenerMetadata(r, structpb.NewStringValue(envoyInternalMetadata))
 }
 
 func (f *fixture) run(t *testing.T, r *extprocv3.ProcessingRequest) *extprocv3.ProcessingResponse {
@@ -461,7 +464,7 @@ func TestCaller(t *testing.T) {
 
 	// Without a whois source, every caller is unknown.
 	f = newFixture()
-	f.srv = New(cfg, f.robots, f.signer, nil)
+	f.srv = New(cfg, f.robots, f.robots, f.signer, nil)
 	r = f.run(t, request(callerAddr))
 	mutation(t, r)
 	if c := meta(t, r)["caller"].GetStringValue(); c != "unknown" {
@@ -508,22 +511,6 @@ func TestInternalListener(t *testing.T) {
 	)
 }
 
-// Guards: G7
-func TestCamelCaseListenerMetadata(t *testing.T) {
-	f := newFixture()
-	r := request("")
-	md, _ := structpb.NewStruct(
-		map[string]any{"filterMetadata": map[string]any{"crawl": map[string]any{"internal": true}}},
-	)
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(
-		md,
-	)
-	mutation(t, f.run(t, r))
-	if len(f.robots.calls) != 0 {
-		t.Error("filterMetadata not recognised as internal")
-	}
-}
-
 func TestIPv6Literal(t *testing.T) {
 	f := newFixture()
 	mutation(t, f.run(t, request(callerAddr, ":authority", "[2001:DB8::1]:443")))
@@ -555,20 +542,25 @@ func TestOnlyListenerMetadataMakesInternal(t *testing.T) {
 		}
 	}
 
-	// internal must be the boolean true.
-	f := newFixture()
-	r := request(callerAddr)
-	md, _ := structpb.NewStruct(
-		map[string]any{
-			"filter_metadata": map[string]any{"crawl": map[string]any{"internal": "true"}},
-		},
-	)
-	r.Attributes["envoy.filters.http.ext_proc"].Fields["xds.listener_metadata"] = structpb.NewStructValue(
-		md,
-	)
-	f.run(t, r)
-	if len(f.robots.calls) != 1 {
-		t.Error("a string internal skipped robots")
+	// internal must be the boolean true, in the form Envoy sends.
+	structForm, _ := structpb.NewStruct(map[string]any{
+		"filter_metadata": map[string]any{"crawl": map[string]any{"internal": true}},
+	})
+	for name, v := range map[string]*structpb.Value{
+		"string true": structpb.NewStringValue(
+			`filter_metadata { key: "crawl" value { fields { key: "internal" value { string_value: "true" } } } }`,
+		),
+		"other namespace": structpb.NewStringValue(
+			`filter_metadata { key: "other" value { fields { key: "internal" value { bool_value: true } } } }`,
+		),
+		"malformed":   structpb.NewStringValue(`filter_metadata { key: "crawl" value { fields { key: "internal"`),
+		"struct form": structpb.NewStructValue(structForm),
+	} {
+		f := newFixture()
+		f.run(t, listenerMetadata(request(callerAddr), v))
+		if len(f.robots.calls) != 1 {
+			t.Errorf("%s: skipped robots", name)
+		}
 	}
 }
 

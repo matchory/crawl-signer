@@ -62,8 +62,7 @@ endpoint. [Metrics](metrics.md) lists them.
 
 Where crawl-signer serves your signed key directory at `/.well-known/http-message-signatures-directory`, such as
 `127.0.0.1:9200`. Your site at [`signature_agent`](#signature_agent) forwards that path here. Without it, crawl-signer
-serves no directory. With a Transit key, crawl-signer reads the key's public part at startup, which needs `read` on
-the key. [Become a verified bot](../guides/become-a-verified-bot.md#publish-the-key-directory) sets it up.
+serves no directory. [Become a verified bot](../guides/become-a-verified-bot.md#publish-the-key-directory) sets it up.
 
 ## `user_agent`
 
@@ -161,8 +160,9 @@ The Ed25519 key that signs requests: exactly one of `private_key` and `transit`.
 | string | the key's thumbprint; required with `transit` |
 
 The `keyid` of each signature: the key's [RFC 7638](https://www.rfc-editor.org/rfc/rfc7638) JWK thumbprint, as Web
-Bot Auth requires. For a private key crawl-signer computes it, and refuses to start if you set a different one. For a
-Transit key, which crawl-signer can only sign with, you must set it.
+Bot Auth requires. For a private key crawl-signer computes it. For a Transit key you must set it, and crawl-signer
+reads the key's public part at startup to check it. Either way, crawl-signer refuses to start if the `keyid` isn't the
+key's thumbprint.
 
 ### `signing_key.private_key`
 

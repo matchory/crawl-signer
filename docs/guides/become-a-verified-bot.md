@@ -22,9 +22,6 @@ the directory can't be a static file. crawl-signer serves it, signed with the ke
    "directory_listen": "127.0.0.1:9200"
    ```
 
-   With a Transit key, the policy also needs `read` on the key:
-   [Choose a signing key](choose-a-signing-key.md#a-transit-key).
-
 2. Forward the path from your site to it. With Caddy:
 
    ```text

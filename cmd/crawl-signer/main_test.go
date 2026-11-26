@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"net/http"
@@ -23,7 +24,7 @@ func TestSigningBackendComputesKeyID(t *testing.T) {
 	t.Setenv("CRAWL_SIGNER_TEST_KEY", testKey)
 
 	for _, keyid := range []string{"", testKeyID} {
-		_, got, err := signingBackend(config.SigningKey{
+		_, _, got, err := signingBackend(context.Background(), config.SigningKey{
 			KeyID:      keyid,
 			PrivateKey: &config.DataSource{EnvironmentVariable: "CRAWL_SIGNER_TEST_KEY"},
 		})
@@ -35,7 +36,7 @@ func TestSigningBackendComputesKeyID(t *testing.T) {
 
 // Guards: G5
 func TestSigningBackendRefusesAMismatchedKeyID(t *testing.T) {
-	_, _, err := signingBackend(config.SigningKey{
+	_, _, _, err := signingBackend(context.Background(), config.SigningKey{
 		KeyID:      "not-the-thumbprint",
 		PrivateKey: &config.DataSource{InlineString: testKey},
 	})
@@ -53,43 +54,66 @@ func TestSigningBackendErrors(t *testing.T) {
 			Token: &config.DataSource{EnvironmentVariable: "CRAWL_SIGNER_TEST_UNSET"},
 		}},
 	} {
-		if _, _, err := signingBackend(k); err == nil {
+		if _, _, _, err := signingBackend(context.Background(), k); err == nil {
 			t.Errorf("%s: want error", name)
 		}
 	}
 }
 
-func TestSigningBackendTransitKeepsKeyID(t *testing.T) {
-	t.Setenv("CRAWL_SIGNER_TEST_TOKEN", "s.token\n")
-
-	b, keyid, err := signingBackend(
-		config.SigningKey{KeyID: "transit-kid", Transit: &config.Transit{
-			Address: "https://openbao.example.com:8200", Mount: "transit", Key: "k", Version: 1,
-			Token: &config.DataSource{EnvironmentVariable: "CRAWL_SIGNER_TEST_TOKEN"},
-		}},
-	)
-	if err != nil || b == nil || keyid != "transit-kid" {
-		t.Errorf("got %v, %q, %v", b, keyid, err)
-	}
-}
-
-func TestKeyDirectoryChecksTransitKeyID(t *testing.T) {
-	pub, _, _ := ed25519.GenerateKey(nil)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+// transitServer answers a key read with pub as version 1.
+func transitServer(t *testing.T, pub ed25519.PublicKey) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/transit/keys/k" || r.Header.Get("X-Vault-Token") != "s.token" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
 		w.Write([]byte(`{"data":{"type":"ed25519","keys":{"1":{"public_key":"` +
 			base64.StdEncoding.EncodeToString(pub) + `"}}}}`))
 	}))
-	defer srv.Close()
-	tr, err := sign.NewTransit(srv.URL, "transit", "web-bot-auth", 1, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	const agent = "https://bot.example.com"
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
 
-	if _, err := keyDirectory(agent, tr, tr, sign.Thumbprint(pub)); err != nil {
-		t.Errorf("matching keyid: %v", err)
+func transitKey(address, keyid string) config.SigningKey {
+	return config.SigningKey{KeyID: keyid, Transit: &config.Transit{
+		Address: address, Mount: "transit", Key: "k", Version: 1,
+		Token: &config.DataSource{EnvironmentVariable: "CRAWL_SIGNER_TEST_TOKEN"},
+	}}
+}
+
+func TestSigningBackendTransit(t *testing.T) {
+	t.Setenv("CRAWL_SIGNER_TEST_TOKEN", "s.token\n")
+	pub, _, _ := ed25519.GenerateKey(nil)
+	keyid := sign.Thumbprint(pub)
+
+	b, got, gotID, err := signingBackend(
+		context.Background(),
+		transitKey(transitServer(t, pub), keyid),
+	)
+	if err != nil || b == nil || !got.Equal(pub) || gotID != keyid {
+		t.Errorf("got %v, %x, %q, %v", b, got, gotID, err)
 	}
-	if _, err := keyDirectory(agent, tr, tr, "other"); err == nil {
-		t.Error("mismatched keyid: want error")
+}
+
+// Guards: G5
+func TestSigningBackendRefusesAMismatchedTransitKeyID(t *testing.T) {
+	t.Setenv("CRAWL_SIGNER_TEST_TOKEN", "s.token")
+	pub, _, _ := ed25519.GenerateKey(nil)
+
+	if _, _, _, err := signingBackend(
+		context.Background(),
+		transitKey(transitServer(t, pub), "other"),
+	); err == nil {
+		t.Error("a keyid that is not the Transit key's thumbprint: want error")
+	}
+}
+
+func TestSigningBackendTransitUnreachable(t *testing.T) {
+	t.Setenv("CRAWL_SIGNER_TEST_TOKEN", "s.token")
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close()
+
+	if _, _, _, err := signingBackend(context.Background(), transitKey(srv.URL, "k")); err == nil {
+		t.Error("Transit unreachable: want error")
 	}
 }

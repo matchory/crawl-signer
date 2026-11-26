@@ -245,7 +245,9 @@ run_checks() {
   fetch http://moved.test/private
   check "a redirected robots.txt is followed" refused 403 robots
 
-  # Guards: G8
+  # Guards: G7, G8
+  # crawl-signer's own robots.txt fetch for slow.test goes first. Only if
+  # Envoy's listener metadata marks it internal is it left unpaced.
   fetch http://slow.test/page
   check "the first request under a Crawl-delay goes through" is "${status}" 200
   fetch http://slow.test/page

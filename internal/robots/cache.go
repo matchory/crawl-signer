@@ -100,7 +100,6 @@ type entry struct {
 	allowAll bool      // a 4xx said "no robots.txt"; only valid until expires
 	expires  time.Time
 	failures int
-	next     time.Time // when Crawl-delay lets the next request go
 	elem     *list.Element
 }
 
@@ -109,7 +108,6 @@ type Cache struct {
 	f        Fetcher
 	agent    string
 	maxBytes int64
-	maxDelay time.Duration
 	now      func() time.Time
 	group    singleflight.Group
 
@@ -124,19 +122,12 @@ type Cache struct {
 }
 
 // NewCache returns a cache that applies the rules for the product token
-// agent, holding rules of at most maxBytes and capping Crawl-delay at maxDelay.
-func NewCache(
-	f Fetcher,
-	agent string,
-	maxBytes int64,
-	maxDelay time.Duration,
-	now func() time.Time,
-) *Cache {
+// agent, holding rules of at most maxBytes.
+func NewCache(f Fetcher, agent string, maxBytes int64, now func() time.Time) *Cache {
 	return &Cache{
 		f:        f,
 		agent:    agent,
 		maxBytes: maxBytes,
-		maxDelay: maxDelay,
 		now:      now,
 		entries:  map[string]*entry{},
 		lru:      list.New(),
@@ -193,27 +184,18 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 	return Unavailable
 }
 
-// Pace takes o's next Crawl-delay slot for a request Check allowed. It
-// returns zero if the request may go now, or how long until it may. Only a
-// request that may go takes the slot. An origin with no cached entry, such as
-// one evicted since Check, isn't paced.
-func (c *Cache) Pace(o Origin) time.Duration {
+// Delay returns the Crawl-delay of o's cached rules, or zero without a
+// cached copy.
+func (c *Cache) Delay(o Origin) time.Duration {
 	o, ok := canonical(o)
 	if !ok {
 		return 0
 	}
-	key := o.key()
-	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.entries[key]
-	if !ok {
-		return 0
+	if e, ok := c.entries[o.key()]; ok {
+		return e.rules.Delay
 	}
-	if now.Before(e.next) {
-		return e.next.Sub(now)
-	}
-	e.next = now.Add(min(e.rules.Delay, c.maxDelay))
 	return 0
 }
 

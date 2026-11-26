@@ -15,6 +15,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/matchory/crawl-signer/internal/config"
@@ -33,10 +34,15 @@ const (
 	schemeHTTPS    = "https"
 )
 
-// Robots decides whether robots.txt lets the crawler fetch a path, and paces
-// requests to an origin by its Crawl-delay; *robots.Cache implements it.
+// Robots decides whether robots.txt lets the crawler fetch a path;
+// *robots.Cache implements it.
 type Robots interface {
 	Check(ctx context.Context, o robots.Origin, path string) robots.Outcome
+}
+
+// Pacer spaces requests to an origin by its Crawl-delay; *robots.Pacer
+// implements it.
+type Pacer interface {
 	Pace(o robots.Origin) time.Duration
 }
 
@@ -57,6 +63,7 @@ type Server struct {
 
 	cfg    config.Config
 	robots Robots
+	pacer  Pacer
 	signer Signer
 	whois  Whois
 
@@ -66,8 +73,8 @@ type Server struct {
 
 // New returns a Server. cfg.SigningKey.KeyID must be the key's resolved
 // keyid. w may be nil, which leaves every caller "unknown".
-func New(cfg config.Config, r Robots, s Signer, w Whois) *Server {
-	return &Server{cfg: cfg, robots: r, signer: s, whois: w}
+func New(cfg config.Config, r Robots, p Pacer, s Signer, w Whois) *Server {
+	return &Server{cfg: cfg, robots: r, pacer: p, signer: s, whois: w}
 }
 
 // Process answers the messages of one ext_proc stream, which carries one
@@ -209,7 +216,7 @@ func (s *Server) requestHeaders(
 
 	if !internal {
 		// Refused, not held: waiting here would queue requests in crawl-signer.
-		if wait := s.robots.Pace(origin); wait > 0 {
+		if wait := s.pacer.Pace(origin); wait > 0 {
 			secs := int64((wait + time.Second - 1) / time.Second)
 			return s.refuse(md, http.StatusTooManyRequests, "crawl-delay",
 				header("retry-after", strconv.FormatInt(secs, 10)))
@@ -350,10 +357,12 @@ func source(attrs map[string]*structpb.Struct) (bool, netip.Addr) {
 
 	for _, st := range attrs {
 		f := st.GetFields()
-		lm := f["xds.listener_metadata"].GetStructValue().GetFields()
-		// Envoy's struct conversion may use the proto or the JSON field name.
-		for _, key := range []string{"filter_metadata", "filterMetadata"} {
-			crawl := lm[key].GetStructValue().GetFields()[namespace].GetStructValue().GetFields()
+		// Envoy sends the listener's Metadata message in protobuf text
+		// format, as a string. What doesn't parse isn't internal.
+		var md corev3.Metadata
+		if lm := f["xds.listener_metadata"].GetStringValue(); lm != "" &&
+			prototext.Unmarshal([]byte(lm), &md) == nil {
+			crawl := md.GetFilterMetadata()[namespace].GetFields()
 			v, ok := crawl["internal"].GetKind().(*structpb.Value_BoolValue)
 			if ok && v.BoolValue {
 				internal = true

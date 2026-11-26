@@ -120,9 +120,11 @@ can't add a line to the signed text. A signature is created on a 30-second
 boundary and expires 60 seconds after it; a request always leaves with one
 that is valid for at least 10 more seconds.
 
-The `keyid` of a private key is its RFC 7638 thumbprint. A configured `keyid`
-that differs from the thumbprint stops crawl-signer at startup, so the
-signatures and the published key directory cannot name different keys.
+The `keyid` is the signing key's RFC 7638 thumbprint. For a private key
+crawl-signer computes it; a Transit key's public part is read from Transit
+at startup. A configured `keyid` that differs from the thumbprint stops
+crawl-signer at startup, so the signatures and the published key directory
+cannot name different keys.
 
 ### G6: Every request leaves a record of its verdict
 
@@ -161,8 +163,11 @@ rounded up. A refused request doesn't move the next slot. crawl-signer holds
 no request back, so it queues nothing. crawl-signer's own robots.txt fetches
 (G7) aren't paced.
 
-The pacing state is in memory: it starts empty when crawl-signer starts, and
-for an origin dropped from the robots.txt cache.
+crawl-signer keeps the time of the last request it let through per origin,
+apart from the robots.txt cache: a request before robots.txt was fetched,
+such as the first `/robots.txt`, counts, and an origin dropped from the
+cache keeps its pacing. The state is in memory and starts empty when
+crawl-signer starts.
 
 ### G9: The key directory signs nothing a requester chooses
 
@@ -181,9 +186,6 @@ crawl-signer signs the directory at most once per 50 minutes, so requests to
 the listener can't make it call the signing key more often. A signature is
 valid for an hour; without one, the listener answers `503`.
 
-A Transit key's public part is read from Transit at startup; if its
-thumbprint isn't the configured `keyid`, crawl-signer doesn't start.
-
 ### Environment properties
 
 | ID | Property | Ensured by |
@@ -191,7 +193,7 @@ thumbprint isn't the configured `keyid`, crawl-signer doesn't start.
 | E1 | Envoy runs with an equivalent of `examples/envoy.yaml`: `ext_proc` with `failure_mode_allow: false` before the forward proxy, `x-crawl-upstream` removed by an early header mutation and by the route, `crawl.internal` listener metadata only on the internal listener, and an access log with the `crawl` metadata | operator |
 | E2 | Only crawl-signer can connect to Envoy's internal listener, and only Envoy to crawl-signer's socket | operator, file permissions |
 | E3 | The host's firewall stops Envoy from connecting to internal addresses, and stops everything but Envoy from sending from the gateway's published addresses | operator |
-| E4 | Only crawl-signer can read the private key, or use the Transit key, and only for signing | operator, OpenBao or Vault policy |
+| E4 | Only crawl-signer can read the private key, or use the Transit key, and only to sign and to read its public part | operator, OpenBao or Vault policy |
 | E5 | Only intended callers can reach the callers' listener | operator |
 | E6 | One crawl-signer instance answers for the requests to an origin; each instance paces only what it lets through | operator |
 

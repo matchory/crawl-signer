@@ -37,7 +37,7 @@ alone: systemd hands crawl-signer a copy only it can read.
 
 ## A Transit key
 
-Create an Ed25519 key, and a policy that can sign with it and do nothing else:
+Create an Ed25519 key, and a policy that can sign with it, read its public part and do nothing else:
 
 ```bash
 bao secrets enable transit
@@ -46,17 +46,14 @@ bao policy write crawl-signer - <<'EOF'
 path "transit/sign/web-bot-auth" {
   capabilities = ["update"]
 }
-EOF
-```
-
-If crawl-signer serves your [key directory](become-a-verified-bot.md#publish-the-key-directory), it also reads the
-key's public part once at startup. Add this to the policy:
-
-```hcl
 path "transit/keys/web-bot-auth" {
   capabilities = ["read"]
 }
+EOF
 ```
+
+crawl-signer reads the public part once at startup, to check the `keyid` and for the key directory. It doesn't start
+while Transit doesn't answer; the [systemd unit](deploy-with-envoy.md) restarts it every second until Transit does.
 
 `vault` takes the same commands. Give crawl-signer a token with this policy in one of two ways:
 
@@ -81,8 +78,7 @@ path "transit/keys/web-bot-auth" {
   }
   ```
 
-crawl-signer reads the key's public part only for the key directory, so compute its `keyid` once, from the public key
-Transit reports. With the directory on, crawl-signer refuses to start if the `keyid` is wrong. The
+Compute the `keyid` once, from the public key Transit reports; crawl-signer refuses to start if it's wrong. The
 same commands give the `x` you publish in your [key directory](become-a-verified-bot.md):
 
 ```bash

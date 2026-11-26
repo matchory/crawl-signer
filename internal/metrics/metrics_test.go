@@ -39,7 +39,7 @@ func TestMetrics(t *testing.T) {
 		{err: errors.New("dial")},
 	})
 	now := time.Now()
-	c := robots.NewCache(f, "ExampleBot", 1<<20, time.Minute, func() time.Time { return now })
+	c := robots.NewCache(f, "ExampleBot", 1<<20, func() time.Time { return now })
 	m.Cache(c)
 	ctx := context.Background()
 	c.Check(ctx, robots.Origin{Scheme: "https", Authority: "a.example"}, "/")

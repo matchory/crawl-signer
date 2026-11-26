@@ -59,7 +59,9 @@ bound, and Envoy gives up on crawl-signer after `message_timeout` anyway, 15 sec
 already handles `429`, and knows better than crawl-signer which request to send next. A refused request doesn't
 take a slot, so retrying early doesn't push the next one back.
 
-The time is kept on the origin's cache entry, in memory, and each instance keeps its own: the
+crawl-signer keeps the time of the last request per origin, apart from the cached rules: the first `/robots.txt`
+request counts before the delay is known, and an origin dropped from the cache keeps its pacing. Origins quiet for
+longer than the cap are forgotten. The time is in memory, and each instance keeps its own: the
 [limitations](limitations.md#rates-and-crawl-delay) say what follows.
 
 ## How the fetch leaves

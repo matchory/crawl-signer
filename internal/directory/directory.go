@@ -12,10 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sync"
 	"time"
-
-	"golang.org/x/sync/singleflight"
 
 	"github.com/matchory/crawl-signer/internal/sign"
 )
@@ -33,8 +30,7 @@ const (
 )
 
 type signature struct {
-	input, value string
-	expires      time.Time
+	params, value string
 }
 
 // Directory is an http.Handler for the key directory.
@@ -45,10 +41,7 @@ type Directory struct {
 	body      []byte
 	digest    string
 	now       func() time.Time
-	group     singleflight.Group
-
-	mu  sync.Mutex
-	sig signature
+	w         *sign.Window[signature]
 }
 
 // New returns a Directory for the public key pub, signed through b for the
@@ -66,7 +59,7 @@ func New(
 	}
 
 	authority := sign.CanonicalAuthority("https", u.Host)
-	if authority == "" || authority[0] == ':' {
+	if authority == "" {
 		return nil, fmt.Errorf("directory: invalid authority %q", u.Host)
 	}
 
@@ -81,6 +74,7 @@ func New(
 		body:      body,
 		digest:    "sha-256=:" + base64.StdEncoding.EncodeToString(sum[:]) + ":",
 		now:       now,
+		w:         sign.NewWindow[signature](int64(refresh / time.Second)),
 	}, nil
 }
 
@@ -109,7 +103,7 @@ func (d *Directory) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", mediaType)
 	h.Set("Content-Digest", d.digest)
 	h.Set("Cache-Control", maxAge)
-	h.Set("Signature-Input", "sig1="+sig.input)
+	h.Set("Signature-Input", "sig1="+sig.params)
 	h.Set("Signature", "sig1=:"+sig.value+":")
 
 	if r.Method == http.MethodHead {
@@ -122,53 +116,29 @@ func (d *Directory) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // signature returns the cached signature, re-signing within refresh of its
 // expiry. If re-signing fails, an unexpired signature is still served.
 func (d *Directory) signature(ctx context.Context) (signature, error) {
-	now := d.now()
+	created := d.now().Unix()
 
-	d.mu.Lock()
-	cur := d.sig
-	d.mu.Unlock()
-
-	if now.Before(cur.expires.Add(-refresh)) {
-		return cur, nil
-	}
-
-	v, err, _ := d.group.Do("", func() (any, error) {
-		created := now.Unix()
-		input := fmt.Sprintf(
-			`("@authority";req "content-digest");created=%d;expires=%d;keyid=%q;alg="ed25519";tag="http-message-signatures-directory"`,
-			created,
-			created+int64(validity/time.Second),
-			d.keyid,
-		)
-		base := "\"@authority\";req: " + d.authority + "\n\"content-digest\": " + d.digest +
-			"\n\"@signature-params\": " + input
+	return d.w.Get("", created, func() (signature, int64, error) {
+		expires := created + int64(validity/time.Second)
+		base, params := sign.Params{
+			Components: []sign.Component{
+				{ID: `"@authority";req`, Value: d.authority},
+				{ID: `"content-digest"`, Value: d.digest},
+			},
+			Created: created,
+			Expires: expires,
+			KeyID:   d.keyid,
+			Tag:     "http-message-signatures-directory",
+		}.Base()
 
 		raw, err := d.b.Sign(context.WithoutCancel(ctx), []byte(base))
 		if err != nil {
-			return nil, err
+			return signature{}, 0, err
 		}
 
-		s := signature{
-			input:   input,
-			value:   base64.StdEncoding.EncodeToString(raw),
-			expires: time.Unix(created, 0).Add(validity),
-		}
-
-		d.mu.Lock()
-		d.sig = s
-		d.mu.Unlock()
-
-		return s, nil
+		return signature{
+			params: params,
+			value:  base64.StdEncoding.EncodeToString(raw),
+		}, expires, nil
 	})
-	if err != nil {
-		if now.Before(cur.expires) {
-			return cur, nil
-		}
-
-		return signature{}, err
-	}
-
-	s, _ := v.(signature)
-
-	return s, nil
 }

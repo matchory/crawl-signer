@@ -34,8 +34,8 @@ and Actions (`shellcheck`, `shfmt`, `actionlint`, `zizmor` locally).
 | Package | Holds |
 | --- | --- |
 | `internal/rules` | Static request rules and the header allowlist; standard library only |
-| `internal/robots` | robots.txt parsing (grobotstxt), the per-origin cache, and the fetcher through Envoy's internal listener |
-| `internal/sign` | Signature base, the per-authority signature cache, and the `Backend`s: `LocalKey` and `Transit` |
+| `internal/robots` | robots.txt parsing (grobotstxt), the per-origin cache, the fetcher through Envoy's internal listener, and the Crawl-delay `Pacer` |
+| `internal/sign` | Signature bases (`Params`), the `Window` that caches and refreshes signatures, and the `Backend`s: `LocalKey` and `Transit` |
 | `internal/directory` | The signed key directory `directory_listen` serves |
 | `internal/extproc` | The ext_proc server: one verdict per request, header mutation, dynamic metadata |
 | `internal/whois` | Optional Tailscale caller lookup |

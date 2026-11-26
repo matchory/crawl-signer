@@ -58,7 +58,7 @@ func run(path string) error {
 	)
 	m := metrics.New(reg)
 
-	backend, keyid, err := signingBackend(cfg.SigningKey)
+	backend, pub, keyid, err := signingBackend(context.Background(), cfg.SigningKey)
 	if err != nil {
 		return err
 	}
@@ -73,6 +73,10 @@ func run(path string) error {
 		m.Fetcher(&robots.HTTPFetcher{Socket: cfg.EnvoySocket}),
 		cfg.RobotsAgent,
 		cfg.RobotsCacheBytes,
+		time.Now,
+	)
+	pacer := robots.NewPacer(
+		cache.Delay,
 		time.Duration(cfg.MaxCrawlDelaySeconds)*time.Second,
 		time.Now,
 	)
@@ -83,7 +87,7 @@ func run(path string) error {
 		who = whois.New(&local.Client{}, time.Now)
 	}
 
-	srv := extproc.New(cfg, cache, signer, who)
+	srv := extproc.New(cfg, cache, pacer, signer, who)
 	srv.Count = m.Verdict
 
 	if err := os.Remove(cfg.Listen); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -106,7 +110,7 @@ func run(path string) error {
 
 	var dirSrv *http.Server
 	if cfg.DirectoryListen != "" {
-		d, err := keyDirectory(cfg.SignatureAgent, m.Backend(backend), backend, keyid)
+		d, err := directory.New(m.Backend(backend), pub, cfg.SignatureAgent, time.Now)
 		if err != nil {
 			g.Stop()
 			return err
@@ -154,80 +158,66 @@ func run(path string) error {
 	return nil
 }
 
-// keyDirectory returns the key directory for the signing key, signed through
-// b for agentURL. A Transit key's public key is read from Transit, and must
-// have the configured keyid, so the directory and the signatures name the
-// same key; signingBackend already ties a local key's keyid to the key.
-func keyDirectory(
-	agentURL string,
-	b sign.Backend,
-	key sign.Backend,
-	keyid string,
-) (*directory.Directory, error) {
-	var pub ed25519.PublicKey
-
-	switch k := key.(type) {
-	case *sign.LocalKey:
-		pub = k.Public()
-	case *sign.Transit:
-		var err error
-		if pub, err = k.PublicKey(context.Background()); err != nil {
-			return nil, fmt.Errorf("directory: %w", err)
-		}
-
-		if t := sign.Thumbprint(pub); t != keyid {
-			return nil, fmt.Errorf(
-				"directory: signing_key.keyid is %s, but the Transit key's thumbprint is %s",
-				keyid,
-				t,
-			)
-		}
-	default:
-		return nil, fmt.Errorf("directory: no public key for a %T", key)
-	}
-
-	return directory.New(b, pub, agentURL, time.Now)
-}
-
-// signingBackend opens the configured key and returns it with its keyid. A
-// configured keyid for a private key must be the key's thumbprint, so the
-// published key directory and the signatures cannot disagree.
-func signingBackend(k config.SigningKey) (sign.Backend, string, error) {
+// signingBackend opens the configured key and returns it with its public
+// key and keyid. The keyid must be the public key's thumbprint, so the
+// published key directory and the signatures cannot disagree: it is computed
+// for a private key when not configured, and a Transit key's public key is
+// read from Transit to check it.
+func signingBackend(
+	ctx context.Context,
+	k config.SigningKey,
+) (sign.Backend, ed25519.PublicKey, string, error) {
 	if t := k.Transit; t != nil {
 		var token string
 
 		if t.Token != nil {
 			b, err := t.Token.Read()
 			if err != nil {
-				return nil, "", fmt.Errorf("signing_key.transit.token: %w", err)
+				return nil, nil, "", fmt.Errorf("signing_key.transit.token: %w", err)
 			}
 
 			token = strings.TrimSpace(string(b))
 		}
 
 		tr, err := sign.NewTransit(t.Address, t.Mount, t.Key, t.Version, token)
+		if err != nil {
+			return nil, nil, "", err
+		}
 
-		return tr, k.KeyID, err
+		pub, err := tr.PublicKey(ctx)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("signing_key.transit: %w", err)
+		}
+
+		if keyid := sign.Thumbprint(pub); keyid != k.KeyID {
+			return nil, nil, "", fmt.Errorf(
+				"signing_key.keyid is %s, but the Transit key's thumbprint is %s",
+				k.KeyID,
+				keyid,
+			)
+		}
+
+		return tr, pub, k.KeyID, nil
 	}
 
 	b, err := k.PrivateKey.Read()
 	if err != nil {
-		return nil, "", fmt.Errorf("signing_key.private_key: %w", err)
+		return nil, nil, "", fmt.Errorf("signing_key.private_key: %w", err)
 	}
 
 	key, err := sign.NewLocalKey(b)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 
 	keyid := sign.Thumbprint(key.Public())
 	if k.KeyID != "" && k.KeyID != keyid {
-		return nil, "", fmt.Errorf(
+		return nil, nil, "", fmt.Errorf(
 			"signing_key.keyid is %s, but the private key's thumbprint is %s",
 			k.KeyID,
 			keyid,
 		)
 	}
 
-	return key, keyid, nil
+	return key, key.Public(), keyid, nil
 }

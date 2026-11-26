@@ -34,6 +34,10 @@ func TestCanonicalAuthority(t *testing.T) {
 		{"https", "[fe80::1%eth0]", ""},
 		{"https", "[example.com]", ""},
 		{"https", "[1.2.3.4]", ""},
+		// No host: nothing to sign for or cache under.
+		{"https", ":8443", ""},
+		{"https", ".:8443", ""},
+		{"https", "", ""},
 	} {
 		if got := CanonicalAuthority(c.scheme, c.in); got != c.want {
 			t.Errorf("%s %s: got %q, want %q", c.scheme, c.in, got, c.want)

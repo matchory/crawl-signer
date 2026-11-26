@@ -63,8 +63,8 @@ look it up in your directory. For a private key, crawl-signer computes it at sta
 crawl-signer v0.2.0 listening on /run/crawl-signer/grpc.sock, signing with keyid poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U
 ```
 
-crawl-signer can't read a Transit key's public part, so with Transit you compute the thumbprint once and configure
-it: [Choose a signing key](../guides/choose-a-signing-key.md#a-transit-key) shows how.
+With Transit you compute the thumbprint once and configure it, and crawl-signer checks it against the public part it
+reads from Transit at startup: [Choose a signing key](../guides/choose-a-signing-key.md#a-transit-key) shows how.
 
 ## Two forms of an authority
 

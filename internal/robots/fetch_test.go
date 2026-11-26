@@ -114,7 +114,7 @@ func TestFetchEdgeCases(t *testing.T) {
 		}
 	})
 	clk := newClock()
-	c := NewCache(f, agent, 1<<20, time.Minute, clk.now)
+	c := NewCache(f, agent, 1<<20, clk.now)
 	ctx := context.Background()
 	o := func(h string) Origin { return Origin{Scheme: "https", Authority: h} }
 

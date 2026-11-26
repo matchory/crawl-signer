@@ -28,7 +28,8 @@ For every request, in this order:
   and Google's parser. If robots.txt can't be fetched and no copy is cached, the request is refused.
 - **Identity.** crawl-signer sets `User-Agent`, `From`, `Signature-Agent`, `Signature-Input` and `Signature`. It
   removes every other header except six content-negotiation and caching headers, including cookies and
-  credentials.
+  credentials. `X-Forwarded-Proto` stays, because Envoy matches no route without it, so your route config
+  must strip it (`request_headers_to_remove`).
 
 A request crawl-signer can't decide on is refused, never sent unchecked. Each refusal says why in an
 `X-Crawl-Gateway-Refusal` header, and every verdict reaches Envoy's access log and a Prometheus counter.

@@ -106,7 +106,7 @@ func run(path string) error {
 
 	var dirSrv *http.Server
 	if cfg.DirectoryListen != "" {
-		d, err := keyDirectory(cfg, m.Backend(backend), backend, keyid)
+		d, err := keyDirectory(cfg.SignatureAgent, m.Backend(backend), backend, keyid)
 		if err != nil {
 			g.Stop()
 			return err
@@ -154,11 +154,12 @@ func run(path string) error {
 	return nil
 }
 
-// keyDirectory returns the key directory for the signing key, signing through
-// b. A Transit key's public key is read from Transit, and must have the
-// configured keyid, so the directory and the signatures name the same key.
+// keyDirectory returns the key directory for the signing key, signed through
+// b for agentURL. A Transit key's public key is read from Transit, and must
+// have the configured keyid, so the directory and the signatures name the
+// same key; signingBackend already ties a local key's keyid to the key.
 func keyDirectory(
-	cfg config.Config,
+	agentURL string,
 	b sign.Backend,
 	key sign.Backend,
 	keyid string,
@@ -173,19 +174,19 @@ func keyDirectory(
 		if pub, err = k.PublicKey(context.Background()); err != nil {
 			return nil, fmt.Errorf("directory: %w", err)
 		}
+
+		if t := sign.Thumbprint(pub); t != keyid {
+			return nil, fmt.Errorf(
+				"directory: signing_key.keyid is %s, but the Transit key's thumbprint is %s",
+				keyid,
+				t,
+			)
+		}
 	default:
 		return nil, fmt.Errorf("directory: no public key for a %T", key)
 	}
 
-	if t := sign.Thumbprint(pub); t != keyid {
-		return nil, fmt.Errorf(
-			"directory: signing_key.keyid is %s, but the Transit key's thumbprint is %s",
-			keyid,
-			t,
-		)
-	}
-
-	return directory.New(b, pub, cfg.SignatureAgent, time.Now)
+	return directory.New(b, pub, agentURL, time.Now)
 }
 
 // signingBackend opens the configured key and returns it with its keyid. A

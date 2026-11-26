@@ -148,10 +148,11 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 	if path == "/robots.txt" {
 		return Allowed
 	}
-	o, key, ok := canonical(o)
+	o, ok := canonical(o)
 	if !ok {
 		return Unavailable
 	}
+	key := o.key()
 
 	e, ok := c.lookup(key)
 	hit := ok && c.now().Before(e.expires)
@@ -197,10 +198,11 @@ func (c *Cache) Check(ctx context.Context, o Origin, path string) Outcome {
 // request that may go takes the slot. An origin with no cached entry, such as
 // one evicted since Check, isn't paced.
 func (c *Cache) Pace(o Origin) time.Duration {
-	_, key, ok := canonical(o)
+	o, ok := canonical(o)
 	if !ok {
 		return 0
 	}
+	key := o.key()
 	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -215,19 +217,22 @@ func (c *Cache) Pace(o Origin) time.Duration {
 	return 0
 }
 
-// canonical returns o with a lowercase scheme and canonical authority, and its
-// cache key; false if o can't have a robots.txt.
-func canonical(o Origin) (Origin, string, bool) {
+// canonical returns o with a lowercase scheme and canonical authority; false
+// if o can't have a robots.txt.
+func canonical(o Origin) (Origin, bool) {
 	scheme := strings.ToLower(o.Scheme)
 	if scheme != schemeHTTP && scheme != schemeHTTPS {
-		return Origin{}, "", false
+		return Origin{}, false
 	}
 	auth := sign.CanonicalAuthority(scheme, o.Authority)
 	if auth == "" {
-		return Origin{}, "", false
+		return Origin{}, false
 	}
-	return Origin{Scheme: scheme, Authority: auth}, scheme + "://" + auth, true
+	return Origin{Scheme: scheme, Authority: auth}, true
 }
+
+// key is a canonical origin's cache key.
+func (o Origin) key() string { return o.Scheme + "://" + o.Authority }
 
 // Stats returns the number of cached origins and their rules' size in bytes.
 func (c *Cache) Stats() (int, int64) {

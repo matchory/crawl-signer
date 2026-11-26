@@ -49,6 +49,11 @@ func newDirectory(t *testing.T) (*Directory, *backend, *clock, ed25519.PublicKey
 	return d, b, c, pub
 }
 
+// fetch is a verifier's GET of the directory.
+func fetch(d http.Handler) *httptest.ResponseRecorder {
+	return get(d, http.MethodGet, "bot.example.com", Path)
+}
+
 func get(d http.Handler, method, host, path string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, "https://"+host+path, nil)
 	w := httptest.NewRecorder()
@@ -124,31 +129,17 @@ func TestOtherRequests(t *testing.T) {
 // Guards: G9
 func TestResigning(t *testing.T) {
 	d, b, c, _ := newDirectory(t)
-	first := get(d, http.MethodGet, "bot.example.com", Path).Result().Header.Get("Signature")
+	first := fetch(d).Result().Header.Get("Signature")
+
 	c.t = c.t.Add(49 * time.Minute)
-	if got := get(
-		d,
-		http.MethodGet,
-		"bot.example.com",
-		Path,
-	).Result().
-		Header.Get(
-		"Signature",
-	); got != first ||
-		b.calls != 1 {
+	got := fetch(d).Result().Header.Get("Signature")
+	if got != first || b.calls != 1 {
 		t.Errorf("re-signed %d times before the refresh window", b.calls)
 	}
+
 	c.t = c.t.Add(2 * time.Minute)
-	if got := get(
-		d,
-		http.MethodGet,
-		"bot.example.com",
-		Path,
-	).Result().
-		Header.Get(
-		"Signature",
-	); got == first ||
-		b.calls != 2 {
+	got = fetch(d).Result().Header.Get("Signature")
+	if got == first || b.calls != 2 {
 		t.Errorf("not re-signed within 10 minutes of expiry (%d calls)", b.calls)
 	}
 }
@@ -157,28 +148,20 @@ func TestResigning(t *testing.T) {
 func TestBackendDown(t *testing.T) {
 	d, b, c, _ := newDirectory(t)
 	b.err = errors.New("down")
-	if w := get(
-		d,
-		http.MethodGet,
-		"bot.example.com",
-		Path,
-	); w.Code != http.StatusServiceUnavailable {
+	if w := fetch(d); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no signature: status %d, want 503", w.Code)
 	}
+
 	b.err = nil
-	get(d, http.MethodGet, "bot.example.com", Path)
+	fetch(d)
 	b.err = errors.New("down")
 	c.t = c.t.Add(55 * time.Minute)
-	if w := get(d, http.MethodGet, "bot.example.com", Path); w.Code != http.StatusOK {
+	if w := fetch(d); w.Code != http.StatusOK {
 		t.Errorf("refresh failed with a valid signature cached: status %d", w.Code)
 	}
+
 	c.t = c.t.Add(5 * time.Minute)
-	if w := get(
-		d,
-		http.MethodGet,
-		"bot.example.com",
-		Path,
-	); w.Code != http.StatusServiceUnavailable {
+	if w := fetch(d); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("expired signature: status %d, want 503", w.Code)
 	}
 }

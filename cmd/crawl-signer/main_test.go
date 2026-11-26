@@ -84,12 +84,12 @@ func TestKeyDirectoryChecksTransitKeyID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{SignatureAgent: "https://bot.example.com"}
+	const agent = "https://bot.example.com"
 
-	if _, err := keyDirectory(cfg, tr, tr, sign.Thumbprint(pub)); err != nil {
+	if _, err := keyDirectory(agent, tr, tr, sign.Thumbprint(pub)); err != nil {
 		t.Errorf("matching keyid: %v", err)
 	}
-	if _, err := keyDirectory(cfg, tr, tr, "other"); err == nil {
+	if _, err := keyDirectory(agent, tr, tr, "other"); err == nil {
 		t.Error("mismatched keyid: want error")
 	}
 }

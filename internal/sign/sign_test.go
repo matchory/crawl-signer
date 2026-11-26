@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -448,6 +449,12 @@ func TestTransitSendsNoTokenWhenEmpty(t *testing.T) {
 	}
 }
 
+// keyJSON is Transit's answer to a key read: one key version of type typ.
+func keyJSON(typ string, version int, pub []byte) string {
+	return fmt.Sprintf(`{"data":{"type":%q,"keys":{"%d":{"public_key":%q}}}}`,
+		typ, version, base64.StdEncoding.EncodeToString(pub))
+}
+
 func TestTransitPublicKey(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(nil)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -455,12 +462,7 @@ func TestTransitPublicKey(t *testing.T) {
 			r.Header.Get("X-Vault-Token") != "tok" {
 			t.Errorf("bad request %s %s", r.Method, r.URL.Path)
 		}
-		w.Write(
-			[]byte(
-				`{"data":{"type":"ed25519","keys":{"1":{"public_key":"AAAA"},"2":{"public_key":"` +
-					base64.StdEncoding.EncodeToString(pub) + `"}}}}`,
-			),
-		)
+		w.Write([]byte(keyJSON("ed25519", 2, pub)))
 	}))
 	defer srv.Close()
 
@@ -477,9 +479,9 @@ func TestTransitPublicKey(t *testing.T) {
 	}
 
 	for name, body := range map[string]string{
-		"missing version": `{"data":{"type":"ed25519","keys":{"1":{"public_key":"` + base64.StdEncoding.EncodeToString(pub) + `"}}}}`,
-		"wrong type":      `{"data":{"type":"rsa-2048","keys":{"2":{"public_key":"` + base64.StdEncoding.EncodeToString(pub) + `"}}}}`,
-		"short key":       `{"data":{"type":"ed25519","keys":{"2":{"public_key":"AAAA"}}}}`,
+		"missing version": keyJSON("ed25519", 1, pub),
+		"wrong type":      keyJSON("rsa-2048", 2, pub),
+		"short key":       keyJSON("ed25519", 2, pub[:3]),
 	} {
 		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Write([]byte(body))

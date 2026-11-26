@@ -53,8 +53,9 @@ func NewTransit(address, mount, key string, version int, token string) (*Transit
 		base = "http://transit"
 	}
 
-	t.endpoint = base + "/v1/" + strings.Trim(mount, "/") + "/sign/" + url.PathEscape(key)
-	t.keys = base + "/v1/" + strings.Trim(mount, "/") + "/keys/" + url.PathEscape(key)
+	prefix := base + "/v1/" + strings.Trim(mount, "/")
+	t.endpoint = prefix + "/sign/" + url.PathEscape(key)
+	t.keys = prefix + "/keys/" + url.PathEscape(key)
 
 	return t, nil
 }
